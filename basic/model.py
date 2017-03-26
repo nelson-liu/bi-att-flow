@@ -311,11 +311,6 @@ class Model(object):
         assert isinstance(batch, DataSet)
         config = self.config
 
-        # N = config.batch_size
-        # M = config.max_num_sents
-        # JX = config.max_sent_size
-        # JQ = config.max_ques_size
-        # W = config.max_word_size
         batch_size = config.batch_size
         max_num_sentences = config.max_num_sents
         max_sentence_size = config.max_sent_size
