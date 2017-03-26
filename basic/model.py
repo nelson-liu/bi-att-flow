@@ -29,8 +29,9 @@ class Model(object):
         self.global_step = tf.get_variable('global_step', shape=[], dtype='int32',
                                            initializer=tf.constant_initializer(0), trainable=False)
 
-        # Define forward inputs here
-        # Note: I'm not sure if self.cx and self.cq represent what I named them as.
+        ##############################
+        # Define forward inputs here #
+        ##############################
 
         batch_size = config.batch_size
         max_word_size = config.max_word_size
@@ -112,7 +113,6 @@ class Model(object):
         word_emb_size = config.word_emb_size
         char_conv_out_size = config.char_out_size
 
-
         with tf.variable_scope("emb"):
             if config.use_char_emb:
                 with tf.variable_scope("emb_var"), tf.device("/cpu:0"):
@@ -130,12 +130,12 @@ class Model(object):
                     heights = list(map(int, config.filter_heights.split(',')))
                     assert sum(filter_sizes) == char_conv_out_size, (filter_sizes, char_conv_out_size)
                     with tf.variable_scope("conv"):
-                        char_level_embedded_passage = multi_conv1d(passage_char_embeddings, filter_sizes, heights, "VALID",  self.is_train, config.keep_prob, scope="xx")
+                        char_level_embedded_passage = multi_conv1d(passage_char_embeddings, filter_sizes, heights, "VALID",  self.is_train, config.keep_prob, scope="char_level_embedded_passage")
                         if config.share_cnn_weights:
                             tf.get_variable_scope().reuse_variables()
-                            char_level_embedded_question = multi_conv1d(question_char_embeddings, filter_sizes, heights, "VALID", self.is_train, config.keep_prob, scope="xx")
+                            char_level_embedded_question = multi_conv1d(question_char_embeddings, filter_sizes, heights, "VALID", self.is_train, config.keep_prob, scope="char_level_embedded_passage")
                         else:
-                            char_level_embedded_question = multi_conv1d(question_char_embeddings, filter_sizes, heights, "VALID", self.is_train, config.keep_prob, scope="qq")
+                            char_level_embedded_question = multi_conv1d(question_char_embeddings, filter_sizes, heights, "VALID", self.is_train, config.keep_prob, scope="char_level_embedded_question")
                         char_level_embedded_passage = tf.reshape(char_level_embedded_passage, [-1, max_num_sentences, max_sentence_size, char_conv_out_size])
                         char_level_embedded_question = tf.reshape(char_level_embedded_question, [-1, max_question_size, char_conv_out_size])
 
@@ -155,6 +155,7 @@ class Model(object):
                     word_level_embedded_question = tf.nn.embedding_lookup(word_emb_mat, self.question)
                     self.tensor_dict['word_level_embedded_passage'] = word_level_embedded_passage
                     self.tensor_dict['word_level_embedded_question'] = word_level_embedded_question
+
                 if config.use_char_emb:
                     # TODO: NOT SURE WHAT "di" indicates in the comment below.
                     # [batch_size, max_num_sentences, max_sentence_size, di]
@@ -184,17 +185,17 @@ class Model(object):
 
         with tf.variable_scope("prepro"):
             # [batch_size, J, hidden_size], [batch_size, hidden_size]
-            (fw_outputs, bw_outputs), ((_, fw_final_state), (_, bw_final_state)) = bidirectional_dynamic_rnn(cell_with_dropout, cell_with_dropout, embedded_question, question_len, dtype='float', scope='u1')
+            (fw_outputs, bw_outputs), ((_, fw_final_state), (_, bw_final_state)) = bidirectional_dynamic_rnn(cell_with_dropout, cell_with_dropout, embedded_question, question_len, dtype='float', scope='encoded_question')
             encoded_question = tf.concat(2, [fw_outputs, bw_outputs])
             if config.share_lstm_weights:
                 tf.get_variable_scope().reuse_variables()
                 # [batch_size, max_num_sentences, max_sentence_size, 2*hidden_size]
-                (fw_outputs, bw_outputs), _ = bidirectional_dynamic_rnn(cell, cell, embedded_passage, passage_len, dtype='float', scope='u1')
+                (fw_outputs, bw_outputs), _ = bidirectional_dynamic_rnn(cell, cell, embedded_passage, passage_len, dtype='float', scope='encoded_question')
                 # [batch_size, max_num_sentences, max_sentence_size, 2*hidden_size]
                 encoded_passage = tf.concat(3, [fw_outputs, bw_outputs])
             else:
                 # [batch_size, max_num_sentences, max_sentence_size, 2*hidden_size]
-                (fw_outputs, bw_outputs), _ = bidirectional_dynamic_rnn(cell, cell, embedded_passage, passage_len, dtype='float', scope='h1')
+                (fw_outputs, bw_outputs), _ = bidirectional_dynamic_rnn(cell, cell, embedded_passage, passage_len, dtype='float', scope='encoded_passage')
                 # [batch_size, max_num_sentences, max_sentence_size, 2*hidden_size]
                 encoded_passage = tf.concat(3, [fw_outputs, bw_outputs])
             self.tensor_dict['encoded_question'] = encoded_question
@@ -216,12 +217,13 @@ class Model(object):
             # The modeling layer
             # The 0th (first) bidirectional encoder in the modeling layer
             # [batch_size, max_num_sentences, max_sentence_size, 2*hidden_size]
-            (fw_output_biencoder0, bw_output_biencoder0), _ = bidirectional_dynamic_rnn(first_cell, first_cell, p0, passage_len, dtype='float', scope='g0')
+            (fw_output_biencoder0, bw_output_biencoder0), _ = bidirectional_dynamic_rnn(first_cell, first_cell, p0, passage_len, dtype='float', scope='model_layer_biencoder_0')
             modeled_passage_0 = tf.concat(3, [fw_output_biencoder0, bw_output_biencoder0])
 
             # The 1st (second) bidirectional encoder in the modeling layer
             # [batch_size, max_num_sentences, max_sentence_size, 2*hidden_size]
-            (fw_output_biencoder1, bw_output_biencoder1), _ = bidirectional_dynamic_rnn(first_cell, first_cell, modeled_passage_0, passage_len, dtype='float', scope='g1')
+            (fw_output_biencoder1, bw_output_biencoder1), _ = bidirectional_dynamic_rnn(first_cell, first_cell, modeled_passage_0, passage_len, dtype='float', scope='model_layer_biencoder_1')
+            # This encoding is used to get the start span index.
             modeled_passage_1 = tf.concat(3, [fw_output_biencoder1, bw_output_biencoder1])
 
             # The logits for the start span answer.
@@ -235,7 +237,7 @@ class Model(object):
             # [batch_size, max_num_sentences, max_sentence_size, 2*hidden_size]
             ((fw_end_encoder_output,
               bw_end_encoder_output), _) = bidirectional_dynamic_rnn(cell_with_dropout, cell_with_dropout, tf.concat(3, [p0, modeled_passage_1, a1i, modeled_passage_1 * a1i]),
-                                                                     passage_len, dtype='float', scope='g2')
+                                                                     passage_len, dtype='float', scope='end_span_encoder')
             end_span_modeled_passage = tf.concat(3, [fw_end_encoder_output, bw_end_encoder_output])
             logits2 = get_logits([end_span_modeled_passage, p0], hidden_size, True, wd=config.wd, input_keep_prob=config.input_keep_prob,
                                  mask=self.passage_mask,
@@ -259,7 +261,6 @@ class Model(object):
             self.yp2 = yp2
 
     def _build_loss(self):
-        config = self.config
         max_sentence_size = tf.shape(self.passage)[2]
         max_num_sentences = tf.shape(self.passage)[1]
         loss_mask = tf.reduce_max(tf.cast(self.question_mask, 'float'), 1)
