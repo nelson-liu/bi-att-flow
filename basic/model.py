@@ -34,36 +34,17 @@ class Model(object):
         ##############################
 
         batch_size = config.batch_size
-        max_word_size = config.max_word_size
+        word_size = config.max_word_size
 
-        # self.x = tf.placeholder('int32', [batch_size, None, None], name='x')
         self.passage = tf.placeholder('int32', [batch_size, None, None], name='passage')
-
-        # self.passage_characters = tf.placeholder('int32', [batch_size, None, None, max_word_size], name='cx')
-        self.passage_characters = tf.placeholder('int32', [batch_size, None, None, max_word_size], name='passage_characters')
-
-        # self.passage_mask = tf.placeholder('bool', [batch_size, None, None], name='x_mask')
+        self.passage_characters = tf.placeholder('int32', [batch_size, None, None, word_size], name='passage_characters')
         self.passage_mask = tf.placeholder('bool', [batch_size, None, None], name='passage_mask')
-
-        # self.q = tf.placeholder('int32', [batch_size, None], name='q')
         self.question = tf.placeholder('int32', [batch_size, None], name='question')
-
-        # self.cq = tf.placeholder('int32', [batch_size, None, max_word_size], name='cq')
-        self.question_characters = tf.placeholder('int32', [batch_size, None, max_word_size], name='question_characters')
-
-        # self.q_mask = tf.placeholder('bool', [batch_size, None], name='q_mask')
+        self.question_characters = tf.placeholder('int32', [batch_size, None, word_size], name='question_characters')
         self.question_mask = tf.placeholder('bool', [batch_size, None], name='question_mask')
-
-        # self.y = tf.placeholder('bool', [batch_size, None, None], name='y')
         self.y = tf.placeholder('bool', [batch_size, None, None], name='y')
-
-        # self.y2 = tf.placeholder('bool', [batch_size, None, None], name='y2')
         self.y2 = tf.placeholder('bool', [batch_size, None, None], name='y2')
-
-        # self.is_train = tf.placeholder('bool', [], name='is_train')
         self.is_train = tf.placeholder('bool', [], name='is_train')
-
-        # self.new_emb_mat = tf.placeholder('float', [None, config.word_emb_size], name='new_emb_mat')
         self.new_emb_mat = tf.placeholder('float', [None, config.word_emb_size], name='new_emb_mat')
 
         ###############
@@ -97,17 +78,17 @@ class Model(object):
     def _build_forward(self):
         config = self.config
         batch_size = config.batch_size
-        max_num_sentences = config.max_num_sents
-        max_sentence_size = config.max_sent_size
-        max_question_size = config.max_ques_size
+        num_sentences = config.max_num_sents
+        sentence_size = config.max_sent_size
+        question_size = config.max_ques_size
         word_vocab_size = config.word_vocab_size
         char_vocab_size = config.char_vocab_size
         hidden_size = config.hidden_size
-        max_word_size = config.max_word_size
+        word_size = config.max_word_size
 
-        max_sentence_size = tf.shape(self.passage)[2]
-        max_question_size = tf.shape(self.question)[1]
-        max_num_sentences = tf.shape(self.passage)[1]
+        sentence_size = tf.shape(self.passage)[2]
+        question_size = tf.shape(self.question)[1]
+        num_sentences = tf.shape(self.passage)[1]
 
         char_emb_size = config.char_emb_size
         word_emb_size = config.word_emb_size
@@ -119,48 +100,54 @@ class Model(object):
                     char_emb_mat = tf.get_variable("char_emb_mat", shape=[char_vocab_size, char_emb_size], dtype='float')
 
                 with tf.variable_scope("char"):
-                    # [batch_size, max_num_sentences, max_sentence_size, max_word_size, char_emb_size]
+                    # [batch_size, num_sentences, sentence_size, word_size, char_emb_size]
                     passage_char_embeddings = tf.nn.embedding_lookup(char_emb_mat, self.passage_characters)
-                    # [batch_size, max_question_size, max_word_size, char_emb_size]
+                    # [batch_size, question_size, word_size, char_emb_size]
                     question_char_embeddings = tf.nn.embedding_lookup(char_emb_mat, self.question_characters)
-                    passage_char_embeddings = tf.reshape(passage_char_embeddings, [-1, max_sentence_size, max_word_size, char_emb_size])
-                    question_char_embeddings = tf.reshape(question_char_embeddings, [-1, max_question_size, max_word_size, char_emb_size])
+                    passage_char_embeddings = tf.reshape(passage_char_embeddings, [-1, sentence_size, word_size, char_emb_size])
+                    question_char_embeddings = tf.reshape(question_char_embeddings, [-1, question_size, word_size, char_emb_size])
 
                     filter_sizes = list(map(int, config.out_channel_dims.split(',')))
                     heights = list(map(int, config.filter_heights.split(',')))
                     assert sum(filter_sizes) == char_conv_out_size, (filter_sizes, char_conv_out_size)
                     with tf.variable_scope("conv"):
-                        char_level_embedded_passage = multi_conv1d(passage_char_embeddings, filter_sizes, heights, "VALID",  self.is_train, config.keep_prob, scope="char_level_embedded_passage")
+                        char_level_embedded_passage = multi_conv1d(passage_char_embeddings, filter_sizes, heights, "VALID",
+                                                                   self.is_train, config.keep_prob, scope="char_level_embedded_passage")
                         if config.share_cnn_weights:
                             tf.get_variable_scope().reuse_variables()
-                            char_level_embedded_question = multi_conv1d(question_char_embeddings, filter_sizes, heights, "VALID", self.is_train, config.keep_prob, scope="char_level_embedded_passage")
+                            char_level_embedded_question = multi_conv1d(question_char_embeddings, filter_sizes, heights, "VALID",
+                                                                        self.is_train, config.keep_prob, scope="char_level_embedded_passage")
                         else:
-                            char_level_embedded_question = multi_conv1d(question_char_embeddings, filter_sizes, heights, "VALID", self.is_train, config.keep_prob, scope="char_level_embedded_question")
-                        char_level_embedded_passage = tf.reshape(char_level_embedded_passage, [-1, max_num_sentences, max_sentence_size, char_conv_out_size])
-                        char_level_embedded_question = tf.reshape(char_level_embedded_question, [-1, max_question_size, char_conv_out_size])
+                            char_level_embedded_question = multi_conv1d(question_char_embeddings, filter_sizes, heights, "VALID",
+                                                                        self.is_train, config.keep_prob, scope="char_level_embedded_question")
+                        char_level_embedded_passage = tf.reshape(char_level_embedded_passage,
+                                                                 [-1, num_sentences, sentence_size, char_conv_out_size])
+                        char_level_embedded_question = tf.reshape(char_level_embedded_question,
+                                                                  [-1, question_size, char_conv_out_size])
 
             if config.use_word_emb:
                 with tf.variable_scope("emb_var"), tf.device("/cpu:0"):
                     if config.mode == 'train':
-                        word_emb_mat = tf.get_variable("word_emb_mat", dtype='float', shape=[word_vocab_size, word_emb_size], initializer=get_initializer(config.emb_mat))
+                        word_emb_mat = tf.get_variable("word_emb_mat", dtype='float', shape=[word_vocab_size, word_emb_size],
+                                                       initializer=get_initializer(config.emb_mat))
                     else:
                         word_emb_mat = tf.get_variable("word_emb_mat", shape=[word_vocab_size, ], dtype='float')
                     if config.use_glove_for_unk:
                         word_emb_mat = tf.concat(0, [word_emb_mat, self.new_emb_mat])
 
                 with tf.name_scope("word"):
-                    # [batch_size, max_num_sentences, max_sentence_size, hidden_size]
+                    # [batch_size, num_sentences, sentence_size, hidden_size]
                     word_level_embedded_passage = tf.nn.embedding_lookup(word_emb_mat, self.passage)
-                    # [batch_size, max_question_size, hidden_size]
+                    # [batch_size, question_size, hidden_size]
                     word_level_embedded_question = tf.nn.embedding_lookup(word_emb_mat, self.question)
                     self.tensor_dict['word_level_embedded_passage'] = word_level_embedded_passage
                     self.tensor_dict['word_level_embedded_question'] = word_level_embedded_question
 
                 if config.use_char_emb:
                     # TODO: NOT SURE WHAT "di" indicates in the comment below.
-                    # [batch_size, max_num_sentences, max_sentence_size, di]
+                    # [batch_size, num_sentences, sentence_size, di]
                     embedded_passage = tf.concat(3, [char_level_embedded_passage, word_level_embedded_passage])
-                    # [batch_size, max_question_size, di]
+                    # [batch_size, question_size, di]
                     embedded_question = tf.concat(2, [char_level_embedded_question, word_level_embedded_question])
                 else:
                     embedded_passage = word_level_embedded_passage
@@ -169,88 +156,104 @@ class Model(object):
         # highway network
         if config.highway:
             with tf.variable_scope("highway"):
-                embedded_passage = highway_network(embedded_passage, config.highway_num_layers, True, wd=config.wd, is_train=self.is_train)
+                embedded_passage = highway_network(embedded_passage, config.highway_num_layers,
+                                                   True, wd=config.wd, is_train=self.is_train)
                 tf.get_variable_scope().reuse_variables()
-                embedded_question = highway_network(embedded_question, config.highway_num_layers, True, wd=config.wd, is_train=self.is_train)
+                embedded_question = highway_network(embedded_question, config.highway_num_layers,
+                                                    True, wd=config.wd, is_train=self.is_train)
 
         self.tensor_dict['embedded_passage'] = embedded_passage
         self.tensor_dict['embedded_question'] = embedded_question
 
         cell = BasicLSTMCell(hidden_size, state_is_tuple=True)
         cell_with_dropout = SwitchableDropoutWrapper(cell, self.is_train, input_keep_prob=config.input_keep_prob)
-        # [batch_size, max_num_sentences]
+        # [batch_size, num_sentences]
         passage_len = tf.reduce_sum(tf.cast(self.passage_mask, 'int32'), 2)
         # [batch_size]
         question_len = tf.reduce_sum(tf.cast(self.question_mask, 'int32'), 1)
 
         with tf.variable_scope("prepro"):
             # [batch_size, J, hidden_size], [batch_size, hidden_size]
-            (fw_outputs, bw_outputs), ((_, fw_final_state), (_, bw_final_state)) = bidirectional_dynamic_rnn(cell_with_dropout, cell_with_dropout, embedded_question, question_len, dtype='float', scope='encoded_question')
+            ((fw_outputs, bw_outputs),
+             _) = bidirectional_dynamic_rnn(cell_with_dropout, cell_with_dropout, embedded_question,
+                                            question_len, dtype='float', scope='encoded_question')
             encoded_question = tf.concat(2, [fw_outputs, bw_outputs])
             if config.share_lstm_weights:
                 tf.get_variable_scope().reuse_variables()
-                # [batch_size, max_num_sentences, max_sentence_size, 2*hidden_size]
-                (fw_outputs, bw_outputs), _ = bidirectional_dynamic_rnn(cell, cell, embedded_passage, passage_len, dtype='float', scope='encoded_question')
-                # [batch_size, max_num_sentences, max_sentence_size, 2*hidden_size]
+                # [batch_size, num_sentences, sentence_size, 2*hidden_size]
+                (fw_outputs, bw_outputs), _ = bidirectional_dynamic_rnn(cell, cell, embedded_passage,
+                                                                        passage_len, dtype='float', scope='encoded_question')
+                # [batch_size, num_sentences, sentence_size, 2*hidden_size]
                 encoded_passage = tf.concat(3, [fw_outputs, bw_outputs])
             else:
-                # [batch_size, max_num_sentences, max_sentence_size, 2*hidden_size]
-                (fw_outputs, bw_outputs), _ = bidirectional_dynamic_rnn(cell, cell, embedded_passage, passage_len, dtype='float', scope='encoded_passage')
-                # [batch_size, max_num_sentences, max_sentence_size, 2*hidden_size]
+                # [batch_size, num_sentences, sentence_size, 2*hidden_size]
+                (fw_outputs, bw_outputs), _ = bidirectional_dynamic_rnn(cell, cell, embedded_passage,
+                                                                        passage_len, dtype='float', scope='encoded_passage')
+                # [batch_size, num_sentences, sentence_size, 2*hidden_size]
                 encoded_passage = tf.concat(3, [fw_outputs, bw_outputs])
             self.tensor_dict['encoded_question'] = encoded_question
             self.tensor_dict['encoded_passage'] = encoded_passage
 
         with tf.variable_scope("main"):
             # The Attention Flow layer
-            # TODO: NOT SURE WHAT TO CALL P0 here / NOT SURE WHAT IT REPRESENTS.
             if config.dynamic_att:
-                p0 = encoded_passage
-                encoded_question = tf.reshape(tf.tile(tf.expand_dims(encoded_question, 1), [1, max_num_sentences, 1, 1]), [batch_size * max_num_sentences, max_question_size, 2 * hidden_size])
-                question_mask = tf.reshape(tf.tile(tf.expand_dims(self.question_mask, 1), [1, max_num_sentences, 1]), [batch_size * max_num_sentences, max_question_size])
+                final_merged_passage = encoded_passage
+                encoded_question = tf.reshape(tf.tile(tf.expand_dims(encoded_question, 1), [1, num_sentences, 1, 1]),
+                                              [batch_size * num_sentences, question_size, 2 * hidden_size])
+                question_mask = tf.reshape(tf.tile(tf.expand_dims(self.question_mask, 1), [1, num_sentences, 1]),
+                                           [batch_size * num_sentences, question_size])
                 first_cell = AttentionCell(cell, encoded_question, mask=question_mask, mapper='sim',
                                            input_keep_prob=self.config.input_keep_prob, is_train=self.is_train)
             else:
-                p0 = attention_layer(config, self.is_train, encoded_passage, encoded_question, h_mask=self.passage_mask, u_mask=self.question_mask, scope="p0", tensor_dict=self.tensor_dict)
+                final_merged_passage = attention_layer(config, self.is_train, encoded_passage, encoded_question,
+                                                       h_mask=self.passage_mask, u_mask=self.question_mask,
+                                                       scope="final_merged_passage", tensor_dict=self.tensor_dict)
                 first_cell = cell_with_dropout
 
             # The modeling layer
             # The 0th (first) bidirectional encoder in the modeling layer
-            # [batch_size, max_num_sentences, max_sentence_size, 2*hidden_size]
-            (fw_output_biencoder0, bw_output_biencoder0), _ = bidirectional_dynamic_rnn(first_cell, first_cell, p0, passage_len, dtype='float', scope='model_layer_biencoder_0')
+            # [batch_size, num_sentences, sentence_size, 2*hidden_size]
+            (fw_output_biencoder0, bw_output_biencoder0), _ = bidirectional_dynamic_rnn(first_cell, first_cell, final_merged_passage,
+                                                                                        passage_len, dtype='float', scope='model_layer_biencoder_0')
             modeled_passage_0 = tf.concat(3, [fw_output_biencoder0, bw_output_biencoder0])
 
             # The 1st (second) bidirectional encoder in the modeling layer
-            # [batch_size, max_num_sentences, max_sentence_size, 2*hidden_size]
-            (fw_output_biencoder1, bw_output_biencoder1), _ = bidirectional_dynamic_rnn(first_cell, first_cell, modeled_passage_0, passage_len, dtype='float', scope='model_layer_biencoder_1')
+            # [batch_size, num_sentences, sentence_size, 2*hidden_size]
+            (fw_output_biencoder1, bw_output_biencoder1), _ = bidirectional_dynamic_rnn(first_cell, first_cell, modeled_passage_0,
+                                                                                        passage_len, dtype='float', scope='model_layer_biencoder_1')
             # This encoding is used to get the start span index.
             modeled_passage_1 = tf.concat(3, [fw_output_biencoder1, bw_output_biencoder1])
 
             # The logits for the start span answer.
-            logits = get_logits([modeled_passage_1, p0], hidden_size, True, wd=config.wd, input_keep_prob=config.input_keep_prob,
-                                mask=self.passage_mask, is_train=self.is_train, func=config.answer_func, scope='logits1')
+            span_begin_logits = get_logits([modeled_passage_1, final_merged_passage], hidden_size, True,
+                                           wd=config.wd, input_keep_prob=config.input_keep_prob,
+                                           mask=self.passage_mask, is_train=self.is_train, func=config.answer_func, scope='logits1')
 
-            # TODO: NOT QUITE SURE WHAT'S GOING ON HERE EITHER
-            a1i = softsel(tf.reshape(modeled_passage_1, [batch_size, max_num_sentences * max_sentence_size, 2 * hidden_size]), tf.reshape(logits, [batch_size, max_num_sentences * max_sentence_size]))
-            a1i = tf.tile(tf.expand_dims(tf.expand_dims(a1i, 1), 1), [1, max_num_sentences, max_sentence_size, 1])
+            passage_weighted_by_predicted_span = softsel(tf.reshape(modeled_passage_1, [batch_size, num_sentences * sentence_size, 2 * hidden_size]),
+                                                         tf.reshape(span_begin_logits, [batch_size, num_sentences * sentence_size]))
+            passage_weighted_by_predicted_span = tf.tile(tf.expand_dims(tf.expand_dims(passage_weighted_by_predicted_span, 1), 1),
+                                                         [1, num_sentences, sentence_size, 1])
 
-            # [batch_size, max_num_sentences, max_sentence_size, 2*hidden_size]
+            # [batch_size, num_sentences, sentence_size, 2*hidden_size]
             ((fw_end_encoder_output,
-              bw_end_encoder_output), _) = bidirectional_dynamic_rnn(cell_with_dropout, cell_with_dropout, tf.concat(3, [p0, modeled_passage_1, a1i, modeled_passage_1 * a1i]),
+              bw_end_encoder_output), _) = bidirectional_dynamic_rnn(cell_with_dropout, cell_with_dropout,
+                                                                     tf.concat(3, [final_merged_passage, modeled_passage_1,
+                                                                                   passage_weighted_by_predicted_span,
+                                                                                   modeled_passage_1 * passage_weighted_by_predicted_span]),
                                                                      passage_len, dtype='float', scope='end_span_encoder')
             end_span_modeled_passage = tf.concat(3, [fw_end_encoder_output, bw_end_encoder_output])
-            logits2 = get_logits([end_span_modeled_passage, p0], hidden_size, True, wd=config.wd, input_keep_prob=config.input_keep_prob,
-                                 mask=self.passage_mask,
-                                 is_train=self.is_train, func=config.answer_func, scope='logits2')
+            span_end_logits = get_logits([end_span_modeled_passage, final_merged_passage], hidden_size, True,
+                                         wd=config.wd, input_keep_prob=config.input_keep_prob, mask=self.passage_mask,
+                                         is_train=self.is_train, func=config.answer_func, scope='span_end_logits')
 
-            flat_logits = tf.reshape(logits, [-1, max_num_sentences * max_sentence_size])
-            # [-1, max_num_sentences*max_sentence_size]
+            flat_logits = tf.reshape(span_begin_logits, [-1, num_sentences * sentence_size])
+            # [-1, num_sentences*sentence_size]
             flat_yp = tf.nn.softmax(flat_logits)
-            yp = tf.reshape(flat_yp, [-1, max_num_sentences, max_sentence_size])
+            yp = tf.reshape(flat_yp, [-1, num_sentences, sentence_size])
 
-            flat_logits2 = tf.reshape(logits2, [-1, max_num_sentences * max_sentence_size])
+            flat_logits2 = tf.reshape(span_end_logits, [-1, num_sentences * sentence_size])
             flat_yp2 = tf.nn.softmax(flat_logits2)
-            yp2 = tf.reshape(flat_yp2, [-1, max_num_sentences, max_sentence_size])
+            yp2 = tf.reshape(flat_yp2, [-1, num_sentences, sentence_size])
 
             self.tensor_dict['modeled_passage_1'] = modeled_passage_1
             self.tensor_dict['end_span_modeled_passage'] = end_span_modeled_passage
@@ -261,15 +264,15 @@ class Model(object):
             self.yp2 = yp2
 
     def _build_loss(self):
-        max_sentence_size = tf.shape(self.passage)[2]
-        max_num_sentences = tf.shape(self.passage)[1]
+        sentence_size = tf.shape(self.passage)[2]
+        num_sentences = tf.shape(self.passage)[1]
         loss_mask = tf.reduce_max(tf.cast(self.question_mask, 'float'), 1)
         losses = tf.nn.softmax_cross_entropy_with_logits(
-            self.logits, tf.cast(tf.reshape(self.y, [-1, max_num_sentences * max_sentence_size]), 'float'))
+            self.logits, tf.cast(tf.reshape(self.y, [-1, num_sentences * sentence_size]), 'float'))
         ce_loss = tf.reduce_mean(loss_mask * losses)
         tf.add_to_collection('losses', ce_loss)
         ce_loss2 = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(
-            self.logits2, tf.cast(tf.reshape(self.y2, [-1, max_num_sentences * max_sentence_size]), 'float')))
+            self.logits2, tf.cast(tf.reshape(self.y2, [-1, num_sentences * sentence_size]), 'float')))
         tf.add_to_collection("losses", ce_loss2)
 
         self.loss = tf.add_n(tf.get_collection('losses', scope=self.scope), name='loss')
@@ -312,10 +315,10 @@ class Model(object):
         config = self.config
 
         batch_size = config.batch_size
-        max_num_sentences = config.max_num_sents
-        max_sentence_size = config.max_sent_size
-        max_question_size = config.max_ques_size
-        max_word_size = config.max_word_size
+        num_sentences = config.max_num_sents
+        sentence_size = config.max_sent_size
+        question_size = config.max_ques_size
+        word_size = config.max_word_size
 
         feed_dict = {}
 
@@ -325,30 +328,30 @@ class Model(object):
             First test without len_opt and make sure no OOM, and use len_opt
             """
             if sum(len(sent) for para in batch.data['x'] for sent in para) == 0:
-                new_max_sentence_size = 1
+                new_sentence_size = 1
             else:
-                new_max_sentence_size = max(len(sent) for para in batch.data['x'] for sent in para)
-            max_sentence_size = min(max_sentence_size, new_max_sentence_size)
+                new_sentence_size = max(len(sent) for para in batch.data['x'] for sent in para)
+            sentence_size = min(sentence_size, new_sentence_size)
 
             if sum(len(ques) for ques in batch.data['q']) == 0:
-                new_max_question_size = 1
+                new_question_size = 1
             else:
-                new_max_question_size = max(len(ques) for ques in batch.data['q'])
-            max_question_size = min(max_question_size, new_max_question_size)
+                new_question_size = max(len(ques) for ques in batch.data['q'])
+            question_size = min(question_size, new_question_size)
 
         if config.cpu_opt:
             if sum(len(para) for para in batch.data['x']) == 0:
-                new_max_num_sentences = 1
+                new_num_sentences = 1
             else:
-                new_max_num_sentences = max(len(para) for para in batch.data['x'])
-            max_num_sentences = min(max_num_sentences, new_max_num_sentences)
+                new_num_sentences = max(len(para) for para in batch.data['x'])
+            num_sentences = min(num_sentences, new_num_sentences)
 
-        passage = np.zeros([batch_size, max_num_sentences, max_sentence_size], dtype='int32')
-        passage_characters = np.zeros([batch_size, max_num_sentences, max_sentence_size, max_word_size], dtype='int32')
-        passage_mask = np.zeros([batch_size, max_num_sentences, max_sentence_size], dtype='bool')
-        question = np.zeros([batch_size, max_question_size], dtype='int32')
-        question_characters = np.zeros([batch_size, max_question_size, max_word_size], dtype='int32')
-        question_mask = np.zeros([batch_size, max_question_size], dtype='bool')
+        passage = np.zeros([batch_size, num_sentences, sentence_size], dtype='int32')
+        passage_characters = np.zeros([batch_size, num_sentences, sentence_size, word_size], dtype='int32')
+        passage_mask = np.zeros([batch_size, num_sentences, sentence_size], dtype='bool')
+        question = np.zeros([batch_size, question_size], dtype='int32')
+        question_characters = np.zeros([batch_size, question_size, word_size], dtype='int32')
+        question_mask = np.zeros([batch_size, question_size], dtype='bool')
 
         feed_dict[self.passage] = passage
         feed_dict[self.passage_mask] = passage_mask
@@ -364,8 +367,8 @@ class Model(object):
         CX = batch.data['cx']
 
         if supervised:
-            y = np.zeros([batch_size, max_num_sentences, max_sentence_size], dtype='bool')
-            y2 = np.zeros([batch_size, max_num_sentences, max_sentence_size], dtype='bool')
+            y = np.zeros([batch_size, num_sentences, sentence_size], dtype='bool')
+            y2 = np.zeros([batch_size, num_sentences, sentence_size], dtype='bool')
             feed_dict[self.y] = y
             feed_dict[self.y2] = y2
 
