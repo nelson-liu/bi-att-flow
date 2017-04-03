@@ -39,9 +39,16 @@ class Model(object):
         self.passage = tf.placeholder('int32', [batch_size, None, None], name='passage')
         self.passage_characters = tf.placeholder('int32', [batch_size, None, None, word_size], name='passage_characters')
         self.passage_mask = tf.placeholder('bool', [batch_size, None, None], name='passage_mask')
+
         self.question = tf.placeholder('int32', [batch_size, None], name='question')
         self.question_characters = tf.placeholder('int32', [batch_size, None, word_size], name='question_characters')
         self.question_mask = tf.placeholder('bool', [batch_size, None], name='question_mask')
+
+        # These options shapes should be the same as the passage.
+        self.options = tf.placeholder('int32', [batch_size, None, None], name='options')
+        self.options_characters = tf.placeholder('int32', [batch_size, None, None, word_size], name='options_characters')
+        self.options_mask = tf.placeholder('bool', [batch_size, None, None], name='options_mask')
+
         self.y = tf.placeholder('bool', [batch_size, None, None], name='y')
         self.y2 = tf.placeholder('bool', [batch_size, None, None], name='y2')
         self.is_train = tf.placeholder('bool', [], name='is_train')
@@ -81,14 +88,21 @@ class Model(object):
         num_sentences = config.max_num_sents
         sentence_size = config.max_sent_size
         question_size = config.max_ques_size
+
+        # TODO: add these options to the config
+        num_options = config.max_num_options
+        option_size = config.max_option_size
+
         word_vocab_size = config.word_vocab_size
         char_vocab_size = config.char_vocab_size
         hidden_size = config.hidden_size
         word_size = config.max_word_size
 
-        sentence_size = tf.shape(self.passage)[2]
         question_size = tf.shape(self.question)[1]
         num_sentences = tf.shape(self.passage)[1]
+        sentence_size = tf.shape(self.passage)[2]
+        num_options = tf.shape(self.options)[1]
+        option_size = tf.shape(self.options)[2]
 
         char_emb_size = config.char_emb_size
         word_emb_size = config.word_emb_size
@@ -104,8 +118,12 @@ class Model(object):
                     passage_char_embeddings = tf.nn.embedding_lookup(char_emb_mat, self.passage_characters)
                     # [batch_size, question_size, word_size, char_emb_size]
                     question_char_embeddings = tf.nn.embedding_lookup(char_emb_mat, self.question_characters)
+                    # [batch_size, num_options, option_size, word_size, char_emb_size]
+                    options_char_embeddings = tf.nn.embedding_lookup(char_emb_mat, self.passage_characters)
+
                     passage_char_embeddings = tf.reshape(passage_char_embeddings, [-1, sentence_size, word_size, char_emb_size])
                     question_char_embeddings = tf.reshape(question_char_embeddings, [-1, question_size, word_size, char_emb_size])
+                    options_char_embeddings = tf.reshape(options_char_embeddings, [-1, question_size, word_size, char_emb_size])
 
                     filter_sizes = list(map(int, config.out_channel_dims.split(',')))
                     heights = list(map(int, config.filter_heights.split(',')))
@@ -117,13 +135,22 @@ class Model(object):
                             tf.get_variable_scope().reuse_variables()
                             char_level_embedded_question = multi_conv1d(question_char_embeddings, filter_sizes, heights, "VALID",
                                                                         self.is_train, config.keep_prob, scope="char_level_embedded_passage")
+                            # TODO: Not sure if this reuse variables is necessary...
+                            tf.get_variable_scope().reuse_variables()
+                            char_level_embedded_options = multi_conv1d(options_char_embeddings, filter_sizes, heights, "VALID",
+                                                                       self.is_train, config.keep_prob, scope="char_level_embedded_passage")
                         else:
                             char_level_embedded_question = multi_conv1d(question_char_embeddings, filter_sizes, heights, "VALID",
                                                                         self.is_train, config.keep_prob, scope="char_level_embedded_question")
+                            char_level_embedded_options = multi_conv1d(options_char_embeddings, filter_sizes, heights, "VALID",
+                                                                       self.is_train, config.keep_prob, scope="char_level_embedded_options")
+
                         char_level_embedded_passage = tf.reshape(char_level_embedded_passage,
                                                                  [-1, num_sentences, sentence_size, char_conv_out_size])
                         char_level_embedded_question = tf.reshape(char_level_embedded_question,
                                                                   [-1, question_size, char_conv_out_size])
+                        char_level_embedded_options = tf.reshape(char_level_embedded_options,
+                                                                 [-1, num_options, option_size, char_conv_out_size])
 
             if config.use_word_emb:
                 with tf.variable_scope("emb_var"), tf.device("/cpu:0"):
@@ -140,18 +167,26 @@ class Model(object):
                     word_level_embedded_passage = tf.nn.embedding_lookup(word_emb_mat, self.passage)
                     # [batch_size, question_size, hidden_size]
                     word_level_embedded_question = tf.nn.embedding_lookup(word_emb_mat, self.question)
+                    # [batch_size, num_options, option_size, hidden_size]
+                    word_level_embedded_options = tf.nn.embedding_lookup(word_emb_mat, self.options)
+
                     self.tensor_dict['word_level_embedded_passage'] = word_level_embedded_passage
                     self.tensor_dict['word_level_embedded_question'] = word_level_embedded_question
+                    self.tensor_dict['word_level_embedded_options'] = word_level_embedded_options
 
                 if config.use_char_emb:
                     # TODO: NOT SURE WHAT "di" indicates in the comment below.
+                    # Maybe just a placeholder for embedding dimensionality
                     # [batch_size, num_sentences, sentence_size, di]
                     embedded_passage = tf.concat(3, [char_level_embedded_passage, word_level_embedded_passage])
                     # [batch_size, question_size, di]
                     embedded_question = tf.concat(2, [char_level_embedded_question, word_level_embedded_question])
+                    # [batch_size, num_sentences, sentence_size, di]
+                    embedded_options = tf.concat(3, [char_level_embedded_options, word_level_embedded_options])
                 else:
                     embedded_passage = word_level_embedded_passage
                     embedded_question = word_level_embedded_question
+                    embedded_options = word_level_embedded_options
 
         # highway network
         if config.highway:
@@ -161,9 +196,13 @@ class Model(object):
                 tf.get_variable_scope().reuse_variables()
                 embedded_question = highway_network(embedded_question, config.highway_num_layers,
                                                     True, wd=config.wd, is_train=self.is_train)
+                tf.get_variable_scope().reuse_variables()
+                embedded_options = highway_network(embedded_options, config.highway_num_layers,
+                                                   True, wd=config.wd, is_train=self.is_train)
 
         self.tensor_dict['embedded_passage'] = embedded_passage
         self.tensor_dict['embedded_question'] = embedded_question
+        self.tensor_dict['embedded_options'] = embedded_options
 
         cell = BasicLSTMCell(hidden_size, state_is_tuple=True)
         cell_with_dropout = SwitchableDropoutWrapper(cell, self.is_train, input_keep_prob=config.input_keep_prob)
@@ -171,6 +210,8 @@ class Model(object):
         passage_len = tf.reduce_sum(tf.cast(self.passage_mask, 'int32'), 2)
         # [batch_size]
         question_len = tf.reduce_sum(tf.cast(self.question_mask, 'int32'), 1)
+        # [batch_size, num_sentences]
+        options_len = tf.reduce_sum(tf.cast(self.options_mask, 'int32'), 2)
 
         with tf.variable_scope("prepro"):
             # [batch_size, J, hidden_size], [batch_size, hidden_size]
@@ -185,14 +226,28 @@ class Model(object):
                                                                         passage_len, dtype='float', scope='encoded_question')
                 # [batch_size, num_sentences, sentence_size, 2*hidden_size]
                 encoded_passage = tf.concat(3, [fw_outputs, bw_outputs])
+
+                tf.get_variable_scope().reuse_variables()
+                # [batch_size, num_options, option_size, 2*hidden_size]
+                (fw_outputs, bw_outputs), _ = bidirectional_dynamic_rnn(cell, cell, embedded_options,
+                                                                        options_len, dtype='float', scope='encoded_question')
+                # [batch_size, num_options, option_size, 2*hidden_size]
+                encoded_options = tf.concat(3, [fw_outputs, bw_outputs])
             else:
                 # [batch_size, num_sentences, sentence_size, 2*hidden_size]
                 (fw_outputs, bw_outputs), _ = bidirectional_dynamic_rnn(cell, cell, embedded_passage,
                                                                         passage_len, dtype='float', scope='encoded_passage')
                 # [batch_size, num_sentences, sentence_size, 2*hidden_size]
                 encoded_passage = tf.concat(3, [fw_outputs, bw_outputs])
+
+                # [batch_size, num_options, option_size, 2*hidden_size]
+                (fw_outputs, bw_outputs), _ = bidirectional_dynamic_rnn(cell, cell, embedded_options,
+                                                                        options_len, dtype='float', scope='encoded_options')
+                # [batch_size, num_options, option_size, 2*hidden_size]
+                encoded_options = tf.concat(3, [fw_outputs, bw_outputs])
             self.tensor_dict['encoded_question'] = encoded_question
             self.tensor_dict['encoded_passage'] = encoded_passage
+            self.tensor_dict['encoded_options'] = encoded_options
 
         with tf.variable_scope("main"):
             # The Attention Flow layer
