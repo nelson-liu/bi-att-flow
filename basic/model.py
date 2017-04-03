@@ -304,19 +304,32 @@ class Model(object):
             flat_logits = tf.reshape(span_begin_logits, [-1, num_sentences * sentence_size])
             # [-1, num_sentences*sentence_size]
             flat_yp = tf.nn.softmax(flat_logits)
-            yp = tf.reshape(flat_yp, [-1, num_sentences, sentence_size])
+            # yp = tf.reshape(flat_yp, [-1, num_sentences, sentence_size])
 
             flat_logits2 = tf.reshape(span_end_logits, [-1, num_sentences * sentence_size])
             flat_yp2 = tf.nn.softmax(flat_logits2)
-            yp2 = tf.reshape(flat_yp2, [-1, num_sentences, sentence_size])
+            # yp2 = tf.reshape(flat_yp2, [-1, num_sentences, sentence_size])
 
-            self.tensor_dict['modeled_passage_1'] = modeled_passage_1
-            self.tensor_dict['end_span_modeled_passage'] = end_span_modeled_passage
+            # self.tensor_dict['modeled_passage_1'] = modeled_passage_1
+            # self.tensor_dict['end_span_modeled_passage'] = end_span_modeled_passage
 
-            self.logits = flat_logits
-            self.logits2 = flat_logits2
-            self.yp = yp
-            self.yp2 = yp2
+            # self.logits = flat_logits
+            # self.logits2 = flat_logits2
+            # self.yp = yp
+            # self.yp2 = yp2
+
+            # Now, we take flat_yp and flat_yp2 (or shape [-1, num_sentences*sentence_size])
+            # and we compute a span envelope over the passage.
+            after_span_begin = tf.cumsum(flat_yp, axis=-1)
+            after_span_end = tf.cumsum(flat_yp2, axis=-1)
+            before_span_end = 1.0 - after_span_end
+            # shape: [-1, num_sentences*sentence_size]
+            envelope = after_span_begin * before_span_end
+
+            # Now we multiply the `final_merged_passage` above by the envelope, reshaping the envelope first
+            # to shape [batch_size, num_sentences, sentence_size]. The final_merged_passage has shape
+            # [batch_size, num_sentences, sentence_size, 2xhidden_dim], so the multiplication should broadcast.
+            reshaped_envelope = tf.reshape(envelope, [-1, num_sentences, sentence_size])
 
     def _build_loss(self):
         sentence_size = tf.shape(self.passage)[2]
