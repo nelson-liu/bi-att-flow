@@ -330,6 +330,23 @@ class Model(object):
             # to shape [batch_size, num_sentences, sentence_size]. The final_merged_passage has shape
             # [batch_size, num_sentences, sentence_size, 2xhidden_dim], so the multiplication should broadcast.
             reshaped_envelope = tf.reshape(envelope, [-1, num_sentences, sentence_size])
+            # shape: [-1, num_sentences, sentence_size, 2xhidden_dim]
+            weighted_passage = reshaped_envelope * final_merged_passage
+
+            # Now we want to encode the weighted passage and the answer options.
+            (fw_outputs, bw_outputs), _ = bidirectional_dynamic_rnn(first_cell, first_cell, weighted_passage,
+                                                                    passage_len, dtype='float', scope='encoded_weighted_passage')
+            # shape: [batch_size, num_sentences, sentence_size, 2xhidden_dim]
+            encoded_weighted_passage = tf.concat(3, [fw_outputs, bw_outputs])
+
+            # Not sure if this is the proper way to share weights
+            tf.get_variable_scope().reuse_variables()
+
+            # encoded_options shape: [batch_size, num_options, option_size, 2*hidden_size]
+            (fw_outputs, bw_outputs), _ = bidirectional_dynamic_rnn(first_cell, first_cell, encoded_options,
+                                                                    options_len, dtype='float', scope='encoded_weighted_passage')
+            # [batch_size, num_sentences, sentence_size, 2*hidden_size]
+            final_encoded_options = tf.concat(3, [fw_outputs, bw_outputs])
 
     def _build_loss(self):
         sentence_size = tf.shape(self.passage)[2]
