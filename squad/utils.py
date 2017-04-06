@@ -12,6 +12,7 @@ def get_2d_spans(text, tokenss):
                 print("{} {} {}".format(token, cur_idx, text))
                 raise Exception()
             cur_idx = text.find(token, cur_idx)
+            # (token's start index, token's end index)
             spans.append((cur_idx, cur_idx + len(token)))
             cur_idx += len(token)
         spanss.append(spans)

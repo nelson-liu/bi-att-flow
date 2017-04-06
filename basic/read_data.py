@@ -48,9 +48,9 @@ class DataSet(object):
         self.num_examples = len(self.valid_idxs)
 
     def _sort_key(self, idx):
-        rx = self.data['*x'][idx]
-        x = self.shared['x'][rx[0]][rx[1]]
-        return max(map(len, x))
+        passage_idx = self.data['*x'][idx]
+        passage = self.shared['x'][passage_idx[0]][passage_idx[1]]
+        return max(map(len, passage))
 
     def get_data_size(self):
         if isinstance(self.data, dict):
@@ -173,6 +173,7 @@ def read_data(config, data_type, ref, data_filter=None):
         for vals in zip(*values):
             each = {key: val for key, val in zip(keys, vals)}
             mask.append(data_filter(each, shared))
+        # Only takes data unit with valid answer indexes
         valid_idxs = [idx for idx in range(len(mask)) if mask[idx]]
 
     print("Loaded {}/{} examples from {}".format(len(valid_idxs), num_examples, data_type))
@@ -182,6 +183,10 @@ def read_data(config, data_type, ref, data_filter=None):
         word2vec_dict = shared['lower_word2vec'] if config.lower_word else shared['word2vec']
         word_counter = shared['lower_word_counter'] if config.lower_word else shared['word_counter']
         char_counter = shared['char_counter']
+
+        # Creates mapping for word --> index.
+        # Filters words based on word_count_th.
+        # Adds --NULL-- and --UNK-- as well.
         if config.finetune:
             shared['word2idx'] = {word: idx + 2 for idx, word in
                                   enumerate(word for word, count in word_counter.items()
@@ -203,6 +208,7 @@ def read_data(config, data_type, ref, data_filter=None):
         shared['char2idx'][UNK] = 1
         json.dump({'word2idx': shared['word2idx'], 'char2idx': shared['char2idx']}, open(shared_path, 'w'))
     else:
+        # Loads an existing file instead
         new_shared = json.load(open(shared_path, 'r'))
         for key, val in new_shared.items():
             shared[key] = val
@@ -212,7 +218,10 @@ def read_data(config, data_type, ref, data_filter=None):
         word2vec_dict = shared['lower_word2vec'] if config.lower_word else shared['word2vec']
         new_word2idx_dict = {word: idx for idx, word in enumerate(word for word in word2vec_dict.keys() if word not in shared['word2idx'])}
         shared['new_word2idx'] = new_word2idx_dict
+
         offset = len(shared['word2idx'])
+
+        # Creates new_emb_mat
         word2vec_dict = shared['lower_word2vec'] if config.lower_word else shared['word2vec']
         new_word2idx_dict = shared['new_word2idx']
         idx2vec_dict = {idx: word2vec_dict[word] for word, idx in new_word2idx_dict.items()}
@@ -227,13 +236,13 @@ def read_data(config, data_type, ref, data_filter=None):
 def get_squad_data_filter(config):
     def data_filter(data_point, shared):
         assert shared is not None
-        rx, rcx, q, cq, y = (data_point[key] for key in ('*x', '*cx', 'q', 'cq', 'y'))
-        x, cx = shared['x'], shared['cx']
-        if len(q) > config.ques_size_th:
+        passage_idx, passage_characters_idx, question, question_characters, y = (data_point[key] for key in ('*x', '*cx', 'q', 'cq', 'y'))
+        passage, passage_characters = shared['x'], shared['cx']
+        if len(question) > config.ques_size_th:
             return False
 
         # x filter
-        xi = x[rx[0]][rx[1]]
+        xi = passage[passage_idx[0]][passage_idx[1]]
         if config.squash:
             for start, stop in y:
                 stop_offset = sum(map(len, xi[:stop[0]]))
@@ -243,6 +252,7 @@ def get_squad_data_filter(config):
 
         if config.single:
             for start, stop in y:
+                # Checks for if answer in same sentence
                 if start[0] != stop[0]:
                     return False
 
@@ -287,16 +297,17 @@ def update_config(config, data_sets):
         data = data_set.data
         shared = data_set.shared
         for idx in data_set.valid_idxs:
-            rx = data['*x'][idx]
-            q = data['q'][idx]
-            sents = shared['x'][rx[0]][rx[1]]
+            passage_idx = data['*x'][idx]
+            question = data['q'][idx]
+            sents = shared['x'][passage_idx[0]][passage_idx[1]]
+
             config.max_para_size = max(config.max_para_size, sum(map(len, sents)))
             config.max_num_sents = max(config.max_num_sents, len(sents))
             config.max_sent_size = max(config.max_sent_size, max(map(len, sents)))
             config.max_word_size = max(config.max_word_size, max(len(word) for sent in sents for word in sent))
-            if len(q) > 0:
-                config.max_ques_size = max(config.max_ques_size, len(q))
-                config.max_word_size = max(config.max_word_size, max(len(word) for word in q))
+            if len(question) > 0:
+                config.max_ques_size = max(config.max_ques_size, len(question))
+                config.max_word_size = max(config.max_word_size, max(len(word) for word in question))
 
     if config.mode == 'train':
         config.max_num_sents = min(config.max_num_sents, config.num_sents_th)
