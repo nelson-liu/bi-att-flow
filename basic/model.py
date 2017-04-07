@@ -301,27 +301,27 @@ class Model(object):
                                          wd=config.wd, input_keep_prob=config.input_keep_prob, mask=self.passage_mask,
                                          is_train=self.is_train, func=config.answer_func, scope='span_end_logits')
 
-            flat_logits = tf.reshape(span_begin_logits, [-1, num_sentences * sentence_size])
+            flat_span_begin_logits = tf.reshape(span_begin_logits, [-1, num_sentences * sentence_size])
             # [-1, num_sentences*sentence_size]
-            flat_yp = tf.nn.softmax(flat_logits)
-            # yp = tf.reshape(flat_yp, [-1, num_sentences, sentence_size])
+            flat_span_begin = tf.nn.softmax(flat_span_begin_logits)
+            # span_begin = tf.reshape(flat_span_begin, [-1, num_sentences, sentence_size])
 
-            flat_logits2 = tf.reshape(span_end_logits, [-1, num_sentences * sentence_size])
-            flat_yp2 = tf.nn.softmax(flat_logits2)
-            # yp2 = tf.reshape(flat_yp2, [-1, num_sentences, sentence_size])
+            flat_span_end_logits = tf.reshape(span_end_logits, [-1, num_sentences * sentence_size])
+            flat_span_end = tf.nn.softmax(flat_span_end_logits)
+            # span_end = tf.reshape(flat_span_end, [-1, num_sentences, sentence_size])
 
             # self.tensor_dict['modeled_passage_1'] = modeled_passage_1
             # self.tensor_dict['end_span_modeled_passage'] = end_span_modeled_passage
 
-            # self.logits = flat_logits
-            # self.logits2 = flat_logits2
-            # self.yp = yp
-            # self.yp2 = yp2
+            # self.logits = flat_span_begin_logits
+            # self.logits2 = flat_span_end_logits
+            # self.span_begin = span_begin
+            # self.span_end = span_end
 
-            # Now, we take flat_yp and flat_yp2 (or shape [-1, num_sentences*sentence_size])
+            # Now, we take flat_span_begin and flat_span_end (or shape [-1, num_sentences*sentence_size])
             # and we compute a span envelope over the passage.
-            after_span_begin = tf.cumsum(flat_yp, axis=-1)
-            after_span_end = tf.cumsum(flat_yp2, axis=-1)
+            after_span_begin = tf.cumsum(flat_span_begin, axis=-1)
+            after_span_end = tf.cumsum(flat_span_end, axis=-1)
             before_span_end = 1.0 - after_span_end
             # shape: [-1, num_sentences*sentence_size]
             envelope = after_span_begin * before_span_end
