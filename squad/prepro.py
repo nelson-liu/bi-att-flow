@@ -124,19 +124,27 @@ def prepro_each(args, data_type, start_ratio=0.0, stop_ratio=1.0, out_name="defa
     source_path = in_path or os.path.join(args.source_dir, "{}-v1.1.json".format(data_type))
     source_data = json.load(open(source_path, 'r'))
 
-    q, cq, y, rx, rcx, ids, idxs = [], [], [], [], [], [], []
-    cy = []
-    x, cx = [], []
+    questions, question_characters = [], []
+    y, y_characters = [], []
+
+    # [article index, paragraph index]
+    passage_index, passage_characters_index = [], []
+    passages, passage_characters = [], []
+
+    # question ids, incremental indexes
+    ids, idxs = [], []
+
     answerss = []
     p = []
     word_counter, char_counter, lower_word_counter = Counter(), Counter(), Counter()
+
     start_ai = int(round(len(source_data['data']) * start_ratio))
     stop_ai = int(round(len(source_data['data']) * stop_ratio))
     for ai, article in enumerate(tqdm(source_data['data'][start_ai:stop_ai])):
         xp, cxp = [], []
         pp = []
-        x.append(xp)
-        cx.append(cxp)
+        passages.append(xp)
+        passage_characters.append(cxp)
         p.append(pp)
         for pi, para in enumerate(article['paragraphs']):
             # wordss
@@ -158,9 +166,10 @@ def prepro_each(args, data_type, start_ratio=0.0, stop_ratio=1.0, out_name="defa
                     for xijkl in xijk:
                         char_counter[xijkl] += len(para['qas'])
 
+            # [article index, paragraph index)
             rxi = [ai, pi]
-            assert len(x) - 1 == ai
-            assert len(x[ai]) - 1 == pi
+            assert len(passages) - 1 == ai
+            assert len(passages[ai]) - 1 == pi
             for qa in para['qas']:
                 # get words
                 qi = word_tokenize(qa['question'])
@@ -173,16 +182,31 @@ def prepro_each(args, data_type, start_ratio=0.0, stop_ratio=1.0, out_name="defa
                     answers.append(answer_text)
                     answer_start = answer['answer_start']
                     answer_stop = answer_start + len(answer_text)
+
+                    # word idx is relative to sentence idx (starts from 0 for every new sentence)
+                    # yi0: indexes for first word of answer_text
+                    # yi1: indexes for last word of answer_text
+                    # yi#: [sent_idx, word_idx]
                     # TODO : put some function that gives word_start, word_stop here
                     yi0, yi1 = get_word_span(context, xi, answer_start, answer_stop)
+
                     # yi0 = answer['answer_word_start'] or [0, 0]
                     # yi1 = answer['answer_word_stop'] or [0, 1]
                     assert len(xi[yi0[0]]) > yi0[1]
                     assert len(xi[yi1[0]]) >= yi1[1]
+
+                    # w0: first word of answer_text
+                    # w1: last word of answer_text
                     w0 = xi[yi0[0]][yi0[1]]
                     w1 = xi[yi1[0]][yi1[1]-1]
+
+                    # i0: first character index of w0
+                    # i1: last character index of w1
                     i0 = get_word_idx(context, xi, yi0)
                     i1 = get_word_idx(context, xi, (yi1[0], yi1[1]-1))
+
+                    # cyi0: first character index of w0 relative to the current sentence
+                    # cyi1: last character index of w1 relative to the current sentence
                     cyi0 = answer_start - i0
                     cyi1 = answer_stop - i1 - 1
                     # print(answer_text, w0[cyi0:], w1[:cyi1+1])
@@ -200,12 +224,12 @@ def prepro_each(args, data_type, start_ratio=0.0, stop_ratio=1.0, out_name="defa
                     for qijk in qij:
                         char_counter[qijk] += 1
 
-                q.append(qi)
-                cq.append(cqi)
+                questions.append(qi)
+                question_characters.append(cqi)
                 y.append(yi)
-                cy.append(cyi)
-                rx.append(rxi)
-                rcx.append(rxi)
+                y_characters.append(cyi)
+                passage_index.append(rxi)
+                passage_characters_index.append(rxi)
                 ids.append(qa['id'])
                 idxs.append(len(idxs))
                 answerss.append(answers)
@@ -217,9 +241,9 @@ def prepro_each(args, data_type, start_ratio=0.0, stop_ratio=1.0, out_name="defa
     lower_word2vec_dict = get_word2vec(args, lower_word_counter)
 
     # add context here
-    data = {'q': q, 'cq': cq, 'y': y, '*x': rx, '*cx': rcx, 'cy': cy,
-            'idxs': idxs, 'ids': ids, 'answerss': answerss, '*p': rx}
-    shared = {'x': x, 'cx': cx, 'p': p,
+    data = {'q': questions, 'cq': question_characters, 'y': y, '*x': passage_index, '*cx': passage_characters_index, 'cy': y_characters,
+            'idxs': idxs, 'ids': ids, 'answerss': answerss, '*p': passage_index}
+    shared = {'x': passages, 'cx': passage_characters, 'p': p,
               'word_counter': word_counter, 'char_counter': char_counter, 'lower_word_counter': lower_word_counter,
               'word2vec': word2vec_dict, 'lower_word2vec': lower_word2vec_dict}
 

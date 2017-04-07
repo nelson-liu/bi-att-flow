@@ -80,10 +80,10 @@ def accuracy2_visualizer(args):
 
     rows = []
     for i, (idx, yi, ypi, yp2i) in tqdm(enumerate(zip(*[eval_[key] for key in ('idxs', 'y', 'yp', 'yp2')])), total=len(eval_['idxs'])):
-        id_, q, rx, answers = (data[key][idx] for key in ('ids', 'q', '*x', 'answerss'))
-        x = shared['x'][rx[0]][rx[1]]
-        ques = [" ".join(q)]
-        para = [[word for word in sent] for sent in x]
+        id_, question, passage_index, answers = (data[key][idx] for key in ('ids', 'q', '*x', 'answerss'))
+        passage = shared['x'][passage_index[0]][passage_index[1]]
+        ques = [" ".join(question)]
+        para = [[word for word in sent] for sent in passage]
         span = get_best_span(ypi, yp2i)
         ap = get_segment(para, span)
         score = "{:.3f}".format(ypi[span[0][0]][span[0][1]] * yp2i[span[1][0]][span[1][1]-1])
