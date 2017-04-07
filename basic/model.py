@@ -49,8 +49,7 @@ class Model(object):
         self.options_characters = tf.placeholder('int32', [batch_size, None, None, word_size], name='options_characters')
         self.options_mask = tf.placeholder('bool', [batch_size, None, None], name='options_mask')
 
-        self.y = tf.placeholder('bool', [batch_size, None, None], name='y')
-        self.y2 = tf.placeholder('bool', [batch_size, None, None], name='y2')
+        self.y = tf.placeholder('bool', [batch_size, None], name='y')
         self.is_train = tf.placeholder('bool', [], name='is_train')
         self.new_emb_mat = tf.placeholder('float', [None, config.word_emb_size], name='new_emb_mat')
 
@@ -378,22 +377,26 @@ class Model(object):
             answer_option_similarities = tf.reduce_sum(
                 tiled_final_encoded_weighted_passage * final_encoded_options,
                 reduction_indices=2)
+
+            # the get_logits function takes the dot product between the final_encoded_options
+            # and the tiled_final_encoded_weighted_passage. The size and bias
+            # (second and third positional arguments) are unused, but the API requires them.
             # shape: [-1, num_options]
-            answer_option_probabilities = tf.nn.softmax(answer_option_similarities)
-            # XXX: I think that the mask is applied in the _build_loss function?
-            self.logits = answer_option_probabilities
+            answer_option_logits = get_logits([tiled_final_encoded_weighted_passage, final_encoded_options],
+                                              hidden_size, True,
+                                              mask=self.options_mask,
+                                              func="dot", scope="option_logits")
+
+            self.logits = answer_option_logits
+            self.yp = tf.nn.softmax(answer_option_logits)
 
     def _build_loss(self):
-        sentence_size = tf.shape(self.passage)[2]
-        num_sentences = tf.shape(self.passage)[1]
-        loss_mask = tf.reduce_max(tf.cast(self.question_mask, 'float'), 1)
+        num_options = tf.shape(self.options)[1]
+        loss_mask = tf.reduce_max(tf.cast(self.options_mask, 'float'), 1)
         losses = tf.nn.softmax_cross_entropy_with_logits(
-            self.logits, tf.cast(tf.reshape(self.y, [-1, num_sentences * sentence_size]), 'float'))
+            self.logits, tf.cast(tf.reshape(self.y, [-1, num_options]), 'float'))
         ce_loss = tf.reduce_mean(loss_mask * losses)
         tf.add_to_collection('losses', ce_loss)
-        ce_loss2 = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(
-            self.logits2, tf.cast(tf.reshape(self.y2, [-1, num_sentences * sentence_size]), 'float')))
-        tf.add_to_collection("losses", ce_loss2)
 
         self.loss = tf.add_n(tf.get_collection('losses', scope=self.scope), name='loss')
         tf.scalar_summary(self.loss.op.name, self.loss)
