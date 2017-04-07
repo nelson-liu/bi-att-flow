@@ -304,19 +304,12 @@ class Model(object):
             flat_span_begin_logits = tf.reshape(span_begin_logits, [-1, num_sentences * sentence_size])
             # [-1, num_sentences*sentence_size]
             flat_span_begin = tf.nn.softmax(flat_span_begin_logits)
-            # span_begin = tf.reshape(flat_span_begin, [-1, num_sentences, sentence_size])
 
             flat_span_end_logits = tf.reshape(span_end_logits, [-1, num_sentences * sentence_size])
             flat_span_end = tf.nn.softmax(flat_span_end_logits)
-            # span_end = tf.reshape(flat_span_end, [-1, num_sentences, sentence_size])
 
-            # self.tensor_dict['modeled_passage_1'] = modeled_passage_1
-            # self.tensor_dict['end_span_modeled_passage'] = end_span_modeled_passage
-
-            # self.logits = flat_span_begin_logits
-            # self.logits2 = flat_span_end_logits
-            # self.span_begin = span_begin
-            # self.span_end = span_end
+            self.tensor_dict['modeled_passage_1'] = modeled_passage_1
+            self.tensor_dict['end_span_modeled_passage'] = end_span_modeled_passage
 
             # Now, we take flat_span_begin and flat_span_end (or shape [-1, num_sentences*sentence_size])
             # and we compute a span envelope over the passage.
@@ -326,27 +319,69 @@ class Model(object):
             # shape: [-1, num_sentences*sentence_size]
             envelope = after_span_begin * before_span_end
 
-            # Now we multiply the `final_merged_passage` above by the envelope, reshaping the envelope first
-            # to shape [batch_size, num_sentences, sentence_size]. The final_merged_passage has shape
-            # [batch_size, num_sentences, sentence_size, 2xhidden_dim], so the multiplication should broadcast.
-            reshaped_envelope = tf.reshape(envelope, [-1, num_sentences, sentence_size])
-            # shape: [-1, num_sentences, sentence_size, 2xhidden_dim]
-            weighted_passage = reshaped_envelope * final_merged_passage
+            # Now we multiply the `encoded_passage` above by the envelope, reshaping the encoded_passage
+            # to [-1, num_sentences*sentence_size, hidden_dim].
+            flattened_encoded_passage = tf.reshape(encoded_passage,
+                                                  [-1, num_sentences * sentence_size,
+                                                   hidden_size * 2])
+            # shape: [-1, num_sentences*sentence_size]
+            flattened_passage_mask = tf.reshape(self.passage_mask,
+                                                [-1, num_sentences * sentence_size])
+            # shape: [-1, num_sentences*sentence_size, 2xhidden_dim]
+            weighted_passage = envelope * flattened_encoded_passage
 
-            # Now we want to encode the weighted passage and the answer options.
-            (fw_outputs, bw_outputs), _ = bidirectional_dynamic_rnn(first_cell, first_cell, weighted_passage,
-                                                                    passage_len, dtype='float', scope='encoded_weighted_passage')
-            # shape: [batch_size, num_sentences, sentence_size, 2xhidden_dim]
-            encoded_weighted_passage = tf.concat(3, [fw_outputs, bw_outputs])
+            # Now, we encode the weighted passage with a bag-of-words
+            # shape: [-1, num_sentences*sentence_size]
+            float_passage_mask = tf.cast(flattened_passage_mask, "float32")
+            # expand the denominator to be same shape as numerator, then add epsilon to avoid
+            # division by 0.
+            # shape: [-1, num_sentences*sentence_size]
+            weighted_passage_mask = float_passage_mask / (tf.reduce_sum(float_passage_mask,
+                                                                        reduction_indices=1,
+                                                                        keepdims=True) + 10e-8)
 
-            # Not sure if this is the proper way to share weights
-            tf.get_variable_scope().reuse_variables()
+            # expand mask to match dimensionality of weighted_passage
+            # shape: [-1, num_sentences*sentence_size, 1]
+            weighted_passage_mask = tf.expand_dims(weighted_passage_mask, axis=-1)
+            # shape: [-1, 2xhidden_dim]
+            final_encoded_weighted_passage = tf.reduce_sum(weighted_passage * weighted_passage_mask,
+                                                           reduction_indices=1)
 
-            # encoded_options shape: [batch_size, num_options, option_size, 2*hidden_size]
-            (fw_outputs, bw_outputs), _ = bidirectional_dynamic_rnn(first_cell, first_cell, encoded_options,
-                                                                    options_len, dtype='float', scope='encoded_weighted_passage')
-            # [batch_size, num_sentences, sentence_size, 2*hidden_size]
-            final_encoded_options = tf.concat(3, [fw_outputs, bw_outputs])
+            # We also encode the encoded options one more time with a bag-of-words
+            # [-1, num_options, option_size]
+            float_options_mask = tf.cast(self.options_mask, "float32")
+            options_shape = encoded_options.get_shape()
+            num_options = options_shape[1]
+
+            # [-1, num_options, option_size]
+            weighted_options_mask = float_options_mask / (tf.reduce_sum(float_passage_mask,
+                                                                        reduction_indices=2,
+                                                                        keepdims=True) + 10e-8)
+            # expand mask to match dimensionality of encoded_options
+            # shape: [-1, num_options, option_size, 1]
+            weighted_options_mask = tf.expand_dims(weighted_options_mask, axis=-1)
+
+            # shape: [-1, num_options, 2xhidden_dim]
+            final_encoded_options = tf.reduce_sum(encoded_options * weighted_options_mask,
+                                                  reduction_indices=2)
+
+            # Now, we want to take the dot product of final_encoded_options and
+            # final_encoded_weighted_passage to get a distribution over our options.
+
+            # tile final_encoded_weighted_passage to be the same shape as the options
+            # shape: [-1, num_options, 2xhidden_dim]
+            tiled_final_encoded_weighted_passage = tf.tile(
+                tf.expand_dims(final_encoded_weighted_passage, 1)
+                [1, num_options, 1])
+
+            # shape: [-1, num_options]
+            answer_option_similarities = tf.reduce_sum(
+                tiled_final_encoded_weighted_passage * final_encoded_options,
+                reduction_indices=2)
+            # shape: [-1, num_options]
+            answer_option_probabilities = tf.nn.softmax(answer_option_similarities)
+            # XXX: I think that the mask is applied in the _build_loss function?
+            self.logits = answer_option_probabilities
 
     def _build_loss(self):
         sentence_size = tf.shape(self.passage)[2]
