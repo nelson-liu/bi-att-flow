@@ -440,6 +440,8 @@ class Model(object):
         batch_size = config.batch_size
         num_sentences = config.max_num_sents
         sentence_size = config.max_sent_size
+        num_options = config.max_num_options
+        option_size = config.max_option_size
         question_size = config.max_ques_size
         word_size = config.max_word_size
 
@@ -475,13 +477,22 @@ class Model(object):
         question = np.zeros([batch_size, question_size], dtype='int32')
         question_characters = np.zeros([batch_size, question_size, word_size], dtype='int32')
         question_mask = np.zeros([batch_size, question_size], dtype='bool')
+        options = np.zeros([batch_size, num_options, option_size], dtype='int32')
+        options_characters = np.zeros([batch_size, num_options, option_size, word_size], dtype='int32')
+        options_mask = np.zeros([batch_size, num_options, option_size], dtype='bool')
 
         feed_dict[self.passage] = passage
         feed_dict[self.passage_mask] = passage_mask
         feed_dict[self.passage_characters] = passage_characters
+
         feed_dict[self.question] = question
         feed_dict[self.question_characters] = question_characters
         feed_dict[self.question_mask] = question_mask
+
+        feed_dict[self.options] = options
+        feed_dict[self.options_characters] = options_characters
+        feed_dict[self.options_mask] = options_mask
+
         feed_dict[self.is_train] = is_train
         if config.use_glove_for_unk:
             feed_dict[self.new_emb_mat] = batch.shared['new_emb_mat']
@@ -489,6 +500,7 @@ class Model(object):
         X = batch.data['x']
         CX = batch.data['cx']
 
+        # TODO: figure out what this does / if it's actually necessary in testing
         if supervised:
             y = np.zeros([batch_size, num_sentences, sentence_size], dtype='bool')
             y2 = np.zeros([batch_size, num_sentences, sentence_size], dtype='bool')
@@ -529,6 +541,7 @@ class Model(object):
                 return d[char]
             return 1
 
+        # Indexes the passage words list and marks the mask values
         for i, xi in enumerate(X):
             if self.config.squash:
                 xi = [list(itertools.chain(*xi))]
@@ -543,6 +556,7 @@ class Model(object):
                     passage[i, j, k] = each
                     passage_mask[i, j, k] = True
 
+        # Indexes the passage characters list.
         for i, cxi in enumerate(CX):
             if self.config.squash:
                 cxi = [list(itertools.chain(*cxi))]
@@ -557,11 +571,43 @@ class Model(object):
                             break
                         passage_characters[i, j, k, l] = _get_char(cxijkl)
 
+        # Indexes the options words list and marks the mask values
+        for i, xi in enumerate(batch.data['options']):
+            if self.config.squash:
+                xi = [list(itertools.chain(*xi))]
+            for j, xij in enumerate(xi):
+                if j == num_options:
+                    break
+                for k, xijk in enumerate(xij):
+                    if k == option_size:
+                        break
+                    each = _get_word(xijk)
+                    assert isinstance(each, int), each
+                    options[i, j, k] = each
+                    options_mask[i, j, k] = True
+
+        # Indexes the options characters list.
+        for i, cxi in enumerate(batch.data['options_characters']):
+            if self.config.squash:
+                cxi = [list(itertools.chain(*cxi))]
+            for j, cxij in enumerate(cxi):
+                if j == num_options:
+                    break
+                for k, cxijk in enumerate(cxij):
+                    if k == option_size:
+                        break
+                    for l, cxijkl in enumerate(cxijk):
+                        if l == config.max_word_size:
+                            break
+                        options_characters[i, j, k, l] = _get_char(cxijkl)
+
+        # Indexes the question words list and marks the mask values
         for i, qi in enumerate(batch.data['q']):
             for j, qij in enumerate(qi):
                 question[i, j] = _get_word(qij)
                 question_mask[i, j] = True
 
+        # Indexes the question characters list
         for i, cqi in enumerate(batch.data['cq']):
             for j, cqij in enumerate(cqi):
                 for k, cqijk in enumerate(cqij):
