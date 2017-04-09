@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import nltk
 # data: q, cq, (dq), (pq), y, *x, *cx
 # shared: x, cx, (dx), (px), word_counter, char_counter, word2vec
 # no metadata
@@ -56,22 +57,26 @@ def prepro(args):
     if not os.path.exists(args.target_dir):
         os.makedirs(args.target_dir)
 
-    if args.mode == 'full':
-        prepro_each(args, 'train', out_name='train')
-        prepro_each(args, 'dev', out_name='dev')
-        prepro_each(args, 'dev', out_name='test')
-    elif args.mode == 'all':
-        create_all(args)
-        prepro_each(args, 'dev', 0.0, 0.0, out_name='dev')
-        prepro_each(args, 'dev', 0.0, 0.0, out_name='test')
-        prepro_each(args, 'all', out_name='train')
-    elif args.mode == 'single':
-        assert len(args.single_path) > 0
-        prepro_each(args, "NULL", out_name="single", in_path=args.single_path)
-    else:
-        prepro_each(args, 'train', 0.0, args.train_ratio, out_name='train')
-        prepro_each(args, 'train', args.train_ratio, 1.0, out_name='dev')
-        prepro_each(args, 'dev', out_name='test')
+    question_path = "/efs/data/dlfa/questions/intermediate/processed/intermediate_4_dev/question_and_answer/questions.tsv"
+    background_path = "/efs/data/dlfa/questions/intermediate/processed/intermediate_4_questions_with_lucene_background/intermediate_4_dev_background.tsv"
+    prepro_each(args, background_path, question_path, out_name='intermediate_4_dev')
+
+    # if args.mode == 'full':
+    #     prepro_each(args, 'train', out_name='train')
+    #     prepro_each(args, 'dev', out_name='dev')
+    #     prepro_each(args, 'dev', out_name='test')
+    # elif args.mode == 'all':
+    #     create_all(args)
+    #     prepro_each(args, 'dev', 0.0, 0.0, out_name='dev')
+    #     prepro_each(args, 'dev', 0.0, 0.0, out_name='test')
+    #     prepro_each(args, 'all', out_name='train')
+    # elif args.mode == 'single':
+    #     assert len(args.single_path) > 0
+    #     prepro_each(args, "NULL", out_name="single", in_path=args.single_path)
+    # else:
+    #     prepro_each(args, 'train', 0.0, args.train_ratio, out_name='train')
+    #     prepro_each(args, 'train', args.train_ratio, 1.0, out_name='dev')
+    #     prepro_each(args, 'dev', out_name='test')
 
 
 def save(args, data, shared, data_type):
@@ -104,147 +109,102 @@ def get_word2vec(args, word_counter):
     return word2vec_dict
 
 
-def prepro_each(args, data_type, start_ratio=0.0, stop_ratio=1.0, out_name="default", in_path=None):
-    if args.tokenizer == "PTB":
-        import nltk
-        sent_tokenize = nltk.sent_tokenize
-        def word_tokenize(tokens):
-            return [token.replace("''", '"').replace("``", '"') for token in nltk.word_tokenize(tokens)]
-    elif args.tokenizer == 'Stanford':
-        from my.corenlp_interface import CoreNLPInterface
-        interface = CoreNLPInterface(args.url, args.port)
-        sent_tokenize = interface.split_doc
-        word_tokenize = interface.split_sent
-    else:
-        raise Exception()
+def prepro_each(args, background_path, questions_path, out_name):
+    def word_tokenize(tokens):
+        return [token.replace("''", '"').replace("``", '"') for token in nltk.word_tokenize(tokens)]
 
-    if not args.split:
-        sent_tokenize = lambda para: [para]
+    # if not args.split:
+    #     sent_tokenize = lambda para: [para]
+    # else:
+    #     sent_tokenize = nltk.sent_tokenize
+    sent_tokenize = nltk.sent_tokenize
 
-    source_path = in_path or os.path.join(args.source_dir, "{}-v1.1.json".format(data_type))
-    source_data = json.load(open(source_path, 'r'))
-
-    questions, question_characters = [], []
-    y, y_characters = [], []
-
-    # [article index, paragraph index]
-    passage_index, passage_characters_index = [], []
-    passages, passage_characters = [], []
-
-    # question ids, incremental indexes
-    ids, idxs = [], []
-
-    answerss = []
-    p = []
+    # Read the questions and background tsvs
+    # raw_file_data is a list of tuples, where the tuple is formatted as:
+    # (string question, string passage, list of options, index of correct answer)
     word_counter, char_counter, lower_word_counter = Counter(), Counter(), Counter()
+    raw_file_data = []
+    with open(questions_path, "r") as questions_file, open(background_path, "r") as background_file:
+        for question_line, background_line in zip(questions_file, background_file):
+            _, question_string, options_string, label_string = question_line.split("\t")
+            options_list = options_string.split("###")
+            label_int = int(label_string)
+            # background_split("\t")[1:] splits on tab, and removes the index at the start of the line.
+            # Then we join the list of strings by spaces.
+            passage_string = ' '.join(background_line.split("\t")[1:])
+            raw_file_data.append((question_string, passage_string, options_list, label_int))
 
-    start_ai = int(round(len(source_data['data']) * start_ratio))
-    stop_ai = int(round(len(source_data['data']) * stop_ratio))
-    for ai, article in enumerate(tqdm(source_data['data'][start_ai:stop_ai])):
-        xp, cxp = [], []
-        pp = []
-        passages.append(xp)
-        passage_characters.append(cxp)
-        p.append(pp)
-        for pi, para in enumerate(article['paragraphs']):
-            # wordss
-            context = para['context']
-            context = context.replace("''", '" ')
-            context = context.replace("``", '" ')
-            xi = list(map(word_tokenize, sent_tokenize(context)))
-            xi = [process_tokens(tokens) for tokens in xi]  # process tokens
-            # given xi, add chars
-            cxi = [[list(xijk) for xijk in xij] for xij in xi]
-            xp.append(xi)
-            cxp.append(cxi)
-            pp.append(context)
+    tokenized_questions, tokenized_question_characters = [], []
+    tokenized_passages, tokenized_passage_characters = [], []
+    tokenized_options, tokenized_option_characters = [], []
+    labels = []
 
-            for xij in xi:
-                for xijk in xij:
-                    word_counter[xijk] += len(para['qas'])
-                    lower_word_counter[xijk.lower()] += len(para['qas'])
-                    for xijkl in xijk:
-                        char_counter[xijkl] += len(para['qas'])
+    for file_line in tqdm(raw_file_data):
+        question_string, passage_string, options_list, label_int = file_line
+        # Turns a string passage into a list of sentences, where each sentence is a list of words.
+        word_tokenized_passage = [word_tokenize(sentence) for sentence in sent_tokenize(passage_string)]
+        word_tokenized_passage = [process_tokens(token) for token in word_tokenized_passage]
 
-            # [article index, paragraph index)
-            rxi = [ai, pi]
-            assert len(passages) - 1 == ai
-            assert len(passages[ai]) - 1 == pi
-            for qa in para['qas']:
-                # get words
-                qi = word_tokenize(qa['question'])
-                cqi = [list(qij) for qij in qi]
-                yi = []
-                cyi = []
-                answers = []
-                for answer in qa['answers']:
-                    answer_text = answer['text']
-                    answers.append(answer_text)
-                    answer_start = answer['answer_start']
-                    answer_stop = answer_start + len(answer_text)
+        # Further breaks up the word_tokenized_passage by simply replacing each word with a list of characters
+        character_tokenized_passage = [[list(word) for word in sentence] for sentence in word_tokenized_passage]
 
-                    # word idx is relative to sentence idx (starts from 0 for every new sentence)
-                    # yi0: indexes for first word of answer_text
-                    # yi1: indexes for last word of answer_text
-                    # yi#: [sent_idx, word_idx]
-                    # TODO : put some function that gives word_start, word_stop here
-                    yi0, yi1 = get_word_span(context, xi, answer_start, answer_stop)
+        # Turns a string question into a list of words
+        word_tokenized_question = word_tokenize(question_string)
 
-                    # yi0 = answer['answer_word_start'] or [0, 0]
-                    # yi1 = answer['answer_word_stop'] or [0, 1]
-                    assert len(xi[yi0[0]]) > yi0[1]
-                    assert len(xi[yi1[0]]) >= yi1[1]
+        # Futher breaks up the word_tokenized_question by simply replacing each word with a list of characters
+        character_tokenized_question = [list(word) for word in word_tokenized_question]
 
-                    # w0: first word of answer_text
-                    # w1: last word of answer_text
-                    w0 = xi[yi0[0]][yi0[1]]
-                    w1 = xi[yi1[0]][yi1[1]-1]
+        # Turns a list of options into a list of options, where each option is a list of words
+        word_tokenized_options = [word_tokenize(option) for option in options_list]
 
-                    # i0: first character index of w0
-                    # i1: last character index of w1
-                    i0 = get_word_idx(context, xi, yi0)
-                    i1 = get_word_idx(context, xi, (yi1[0], yi1[1]-1))
+        # Futher breaks up the word_tokenized_options by simply replacing each word witha list of characters
+        character_tokenized_options = [[list(word) for word in option] for option in word_tokenized_options]
 
-                    # cyi0: first character index of w0 relative to the current sentence
-                    # cyi1: last character index of w1 relative to the current sentence
-                    cyi0 = answer_start - i0
-                    cyi1 = answer_stop - i1 - 1
-                    # print(answer_text, w0[cyi0:], w1[:cyi1+1])
-                    assert answer_text[0] == w0[cyi0], (answer_text, w0, cyi0)
-                    assert answer_text[-1] == w1[cyi1]
-                    assert cyi0 < 32, (answer_text, w0)
-                    assert cyi1 < 32, (answer_text, w1)
+        # update the counters with the frequency of each word and character in the passage, options, and question
+        for sentence in word_tokenized_passage:
+            for word in sentence:
+                word_counter[word] += 1
+                lower_word_counter[word.lower()] += 1
+                for character in word:
+                    char_counter[character] += 1
 
-                    yi.append([yi0, yi1])
-                    cyi.append([cyi0, cyi1])
+        for option in word_tokenized_options:
+            for word in option:
+                word_counter[word] += 1
+                lower_word_counter[word.lower()] += 1
+                for character in word:
+                    char_counter[character] += 1
 
-                for qij in qi:
-                    word_counter[qij] += 1
-                    lower_word_counter[qij.lower()] += 1
-                    for qijk in qij:
-                        char_counter[qijk] += 1
+        for word in word_tokenized_question:
+            word_counter[word] += 1
+            lower_word_counter[word.lower()] += 1
+            for character in word:
+                char_counter[character] += 1
 
-                questions.append(qi)
-                question_characters.append(cqi)
-                y.append(yi)
-                y_characters.append(cyi)
-                passage_index.append(rxi)
-                passage_characters_index.append(rxi)
-                ids.append(qa['id'])
-                idxs.append(len(idxs))
-                answerss.append(answers)
+        tokenized_questions.append(word_tokenized_question)
+        tokenized_question_characters.append(character_tokenized_question)
 
-            if args.debug:
-                break
+        tokenized_passages.append(word_tokenized_passage)
+        tokenized_passage_characters.append(character_tokenized_passage)
+
+        tokenized_options.append(word_tokenized_options)
+        tokenized_option_characters.append(character_tokenized_options)
+
+        labels.append(label_int)
 
     word2vec_dict = get_word2vec(args, word_counter)
     lower_word2vec_dict = get_word2vec(args, lower_word_counter)
 
     # add context here
-    data = {'q': questions, 'cq': question_characters, 'y': y, '*x': passage_index, '*cx': passage_characters_index, 'cy': y_characters,
-            'idxs': idxs, 'ids': ids, 'answerss': answerss, '*p': passage_index}
-    shared = {'x': passages, 'cx': passage_characters, 'p': p,
-              'word_counter': word_counter, 'char_counter': char_counter, 'lower_word_counter': lower_word_counter,
+    data = {'tokenized_questions': tokenized_questions,
+            'tokenized_question_characters': tokenized_question_characters,
+            'tokenized_options': tokenized_options,
+            'tokenized_option_characters': tokenized_option_characters,
+            'tokenized_passages': tokenized_passages,
+            'tokenized_passage_characters': tokenized_passage_characters,
+            'labels': labels}
+
+    shared = {'word_counter': word_counter, 'char_counter': char_counter, 'lower_word_counter': lower_word_counter,
               'word2vec': word2vec_dict, 'lower_word2vec': lower_word2vec_dict}
 
     print("saving ...")
