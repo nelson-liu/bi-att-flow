@@ -157,7 +157,7 @@ class Model(object):
                         word_emb_mat = tf.get_variable("word_emb_mat", dtype='float', shape=[word_vocab_size, word_emb_size],
                                                        initializer=get_initializer(config.emb_mat))
                     else:
-                        word_emb_mat = tf.get_variable("word_emb_mat", shape=[word_vocab_size, ], dtype='float')
+                        word_emb_mat = tf.get_variable("word_emb_mat", shape=[word_vocab_size, word_emb_size], dtype='float')
                     if config.use_glove_for_unk:
                         word_emb_mat = tf.concat(0, [word_emb_mat, self.new_emb_mat])
 
@@ -337,11 +337,11 @@ class Model(object):
             # shape: [-1, num_sentences*sentence_size]
             weighted_passage_mask = float_passage_mask / (tf.reduce_sum(float_passage_mask,
                                                                         reduction_indices=1,
-                                                                        keepdims=True) + 10e-8)
+                                                                        keep_dims=True) + 10e-8)
 
             # expand mask to match dimensionality of weighted_passage
             # shape: [-1, num_sentences*sentence_size, 1]
-            weighted_passage_mask = tf.expand_dims(weighted_passage_mask, axis=-1)
+            weighted_passage_mask = tf.expand_dims(weighted_passage_mask, -1)
             # shape: [-1, 2xhidden_dim]
             final_encoded_weighted_passage = tf.reduce_sum(weighted_passage * weighted_passage_mask,
                                                            reduction_indices=1)
@@ -349,16 +349,14 @@ class Model(object):
             # We also encode the encoded options one more time with a bag-of-words
             # [-1, num_options, option_size]
             float_options_mask = tf.cast(self.options_mask, "float32")
-            options_shape = encoded_options.get_shape()
-            num_options = options_shape[1]
 
             # [-1, num_options, option_size]
-            weighted_options_mask = float_options_mask / (tf.reduce_sum(float_passage_mask,
+            weighted_options_mask = float_options_mask / (tf.reduce_sum(float_options_mask,
                                                                         reduction_indices=2,
-                                                                        keepdims=True) + 10e-8)
+                                                                        keep_dims=True) + 10e-8)
             # expand mask to match dimensionality of encoded_options
             # shape: [-1, num_options, option_size, 1]
-            weighted_options_mask = tf.expand_dims(weighted_options_mask, axis=-1)
+            weighted_options_mask = tf.expand_dims(weighted_options_mask, -1)
 
             # shape: [-1, num_options, 2xhidden_dim]
             final_encoded_options = tf.reduce_sum(encoded_options * weighted_options_mask,
@@ -370,7 +368,7 @@ class Model(object):
             # tile final_encoded_weighted_passage to be the same shape as the options
             # shape: [-1, num_options, 2xhidden_dim]
             tiled_final_encoded_weighted_passage = tf.tile(
-                tf.expand_dims(final_encoded_weighted_passage, 1)
+                tf.expand_dims(final_encoded_weighted_passage, 1),
                 [1, num_options, 1])
 
             # shape: [-1, num_options]
