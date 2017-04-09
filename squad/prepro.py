@@ -25,9 +25,10 @@ def get_args():
     # e.g.:
     # background_path = "/efs/data/dlfa/questions/intermediate/processed/intermediate_4_questions_with_lucene_background/intermediate_4_dev_background.tsv"
     # question_path = "/efs/data/dlfa/questions/intermediate/processed/intermediate_4_dev/question_and_answer/questions.tsv"
-
-    parser.add_argument("background_path")
-    parser.add_argument("question_path")
+    # out_name = "intermediate_4_dev"
+    parser.add_argument("background_path", type=str)
+    parser.add_argument("question_path", type=str)
+    parser.add_argument("out_name", type=str)
     parser.add_argument('-t', "--target_dir", default=target_dir)
     parser.add_argument('-d', "--debug", action='store_true')
     parser.add_argument("--train_ratio", default=0.9, type=int)
@@ -61,7 +62,7 @@ def prepro(args):
     if not os.path.exists(args.target_dir):
         os.makedirs(args.target_dir)
 
-    prepro_each(args, args.background_path, args.question_path, out_name='intermediate_4_dev')
+    prepro_each(args, args.background_path, args.question_path, out_name=args.intermediate_4_dev)
 
     # if args.mode == 'full':
     #     prepro_each(args, 'train', out_name='train')
