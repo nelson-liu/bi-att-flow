@@ -128,11 +128,14 @@ def _train(config):
 
 
 def _test(config):
-    test_data = read_data(config, 'test', True)
+    assert config.out_name
+    test_data = read_data(config, config.out_name, True)
+    # This method updates the max lengths according to data
     update_config(config, [test_data])
 
     _config_debug(config)
 
+    # This seems to do the same thing as the last part of the read_data.read_data method...but it stores it in config instead?
     if config.use_glove_for_unk:
         word2vec_dict = test_data.shared['lower_word2vec'] if config.lower_word else test_data.shared['word2vec']
         new_word2idx_dict = test_data.shared['new_word2idx']
