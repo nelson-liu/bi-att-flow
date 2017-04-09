@@ -62,7 +62,7 @@ def prepro(args):
     if not os.path.exists(args.target_dir):
         os.makedirs(args.target_dir)
 
-    prepro_each(args, args.background_path, args.question_path, out_name=args.intermediate_4_dev)
+    prepro_each(args, args.background_path, args.question_path, out_name=args.out_name)
 
     # if args.mode == 'full':
     #     prepro_each(args, 'train', out_name='train')
