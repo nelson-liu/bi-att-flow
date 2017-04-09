@@ -20,10 +20,14 @@ def main():
 def get_args():
     parser = argparse.ArgumentParser()
     home = os.path.expanduser("~")
-    source_dir = os.path.join(home, "data", "squad")
     target_dir = "data/squad"
     glove_dir = os.path.join(home, "data", "glove")
-    parser.add_argument('-s', "--source_dir", default=source_dir)
+    # e.g.:
+    # background_path = "/efs/data/dlfa/questions/intermediate/processed/intermediate_4_questions_with_lucene_background/intermediate_4_dev_background.tsv"
+    # question_path = "/efs/data/dlfa/questions/intermediate/processed/intermediate_4_dev/question_and_answer/questions.tsv"
+
+    parser.add_argument("background_path")
+    parser.add_argument("question_path")
     parser.add_argument('-t', "--target_dir", default=target_dir)
     parser.add_argument('-d', "--debug", action='store_true')
     parser.add_argument("--train_ratio", default=0.9, type=int)
@@ -57,9 +61,7 @@ def prepro(args):
     if not os.path.exists(args.target_dir):
         os.makedirs(args.target_dir)
 
-    question_path = "/efs/data/dlfa/questions/intermediate/processed/intermediate_4_dev/question_and_answer/questions.tsv"
-    background_path = "/efs/data/dlfa/questions/intermediate/processed/intermediate_4_questions_with_lucene_background/intermediate_4_dev_background.tsv"
-    prepro_each(args, background_path, question_path, out_name='intermediate_4_dev')
+    prepro_each(args, args.background_path, args.question_path, out_name='intermediate_4_dev')
 
     # if args.mode == 'full':
     #     prepro_each(args, 'train', out_name='train')
