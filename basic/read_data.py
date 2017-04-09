@@ -164,71 +164,84 @@ def read_data(config, data_type, ref, data_filter=None):
         shared = json.load(fh)
 
     num_examples = len(next(iter(data.values())))
-    if data_filter is None:
-        valid_idxs = range(num_examples)
-    else:
-        mask = []
-        keys = data.keys()
-        values = data.values()
-        for vals in zip(*values):
-            each = {key: val for key, val in zip(keys, vals)}
-            mask.append(data_filter(each, shared))
-        # Only takes data unit with valid answer indexes
-        valid_idxs = [idx for idx in range(len(mask)) if mask[idx]]
+    # if data_filter is None:
+    #     valid_idxs = range(num_examples)
+    # else:
+    #     mask = []
+    #     keys = data.keys()
+    #     values = data.values()
+    #     for vals in zip(*values):
+    #         each = {key: val for key, val in zip(keys, vals)}
+    #         mask.append(data_filter(each, shared))
+    #     # Only takes data unit with valid answer indexes
+    #     valid_idxs = [idx for idx in range(len(mask)) if mask[idx]]
+    # data_filter is generally none, so remove the else logic.
+    valid_idxs = range(num_examples)
 
     print("Loaded {}/{} examples from {}".format(len(valid_idxs), num_examples, data_type))
 
     shared_path = config.shared_path or os.path.join(config.out_dir, "shared.json")
-    if not ref:
-        word2vec_dict = shared['lower_word2vec'] if config.lower_word else shared['word2vec']
-        word_counter = shared['lower_word_counter'] if config.lower_word else shared['word_counter']
-        char_counter = shared['char_counter']
+    # if not ref:
+    #     word2vec_dict = shared['lower_word2vec'] if config.lower_word else shared['word2vec']
+    #     word_counter = shared['lower_word_counter'] if config.lower_word else shared['word_counter']
+    #     char_counter = shared['char_counter']
 
-        # Creates mapping for word --> index.
-        # Filters words based on word_count_th.
-        # Adds --NULL-- and --UNK-- as well.
-        if config.finetune:
-            shared['word2idx'] = {word: idx + 2 for idx, word in
-                                  enumerate(word for word, count in word_counter.items()
-                                            if count > config.word_count_th or (config.known_if_glove and word in word2vec_dict))}
-        else:
-            assert config.known_if_glove
-            assert config.use_glove_for_unk
-            shared['word2idx'] = {word: idx + 2 for idx, word in
-                                  enumerate(word for word, count in word_counter.items()
-                                            if count > config.word_count_th and word not in word2vec_dict)}
-        shared['char2idx'] = {char: idx + 2 for idx, char in
-                              enumerate(char for char, count in char_counter.items()
-                                        if count > config.char_count_th)}
-        NULL = "-NULL-"
-        UNK = "-UNK-"
-        shared['word2idx'][NULL] = 0
-        shared['word2idx'][UNK] = 1
-        shared['char2idx'][NULL] = 0
-        shared['char2idx'][UNK] = 1
-        json.dump({'word2idx': shared['word2idx'], 'char2idx': shared['char2idx']}, open(shared_path, 'w'))
-    else:
-        # Loads an existing file instead
-        new_shared = json.load(open(shared_path, 'r'))
-        for key, val in new_shared.items():
-            shared[key] = val
+    #     # Creates mapping for word --> index.
+    #     # Filters words based on word_count_th.
+    #     # Adds --NULL-- and --UNK-- as well.
+    #     if config.finetune:
+    #         shared['word2idx'] = {word: idx + 2 for idx, word in
+    #                               enumerate(word for word, count in word_counter.items()
+    #                                         if count > config.word_count_th or (config.known_if_glove and word in word2vec_dict))}
+    #     else:
+    #         assert config.known_if_glove
+    #         assert config.use_glove_for_unk
+    #         shared['word2idx'] = {word: idx + 2 for idx, word in
+    #                               enumerate(word for word, count in word_counter.items()
+    #                                         if count > config.word_count_th and word not in word2vec_dict)}
+    #     shared['char2idx'] = {char: idx + 2 for idx, char in
+    #                           enumerate(char for char, count in char_counter.items()
+    #                                     if count > config.char_count_th)}
+    #     NULL = "-NULL-"
+    #     UNK = "-UNK-"
+    #     shared['word2idx'][NULL] = 0
+    #     shared['word2idx'][UNK] = 1
+    #     shared['char2idx'][NULL] = 0
+    #     shared['char2idx'][UNK] = 1
+    #     json.dump({'word2idx': shared['word2idx'], 'char2idx': shared['char2idx']}, open(shared_path, 'w'))
+    # else:
+    #     # Loads an existing file instead
+    #     new_shared = json.load(open(shared_path, 'r'))
+    #     for key, val in new_shared.items():
+    #         shared[key] = val
+
+    # Loads an existing file instead from a previous run of BiDAF
+    # ref is always True for testing
+    new_shared = json.load(open(shared_path, 'r'))
+    # Keys in nonmc bidaf shared: word2idx, char2idx, x, cx, p, word_counter, char_counter, lower_word_counter, word2vec, lower_word2vec
+    # Keys in mc bidaf shared: word_counter, char_counter, lower_word_counter, word2vec, lower_word2vec
+    for key, val in new_shared.items():
+        shared[key] = val
 
     if config.use_glove_for_unk:
         # create new word2idx and word2vec
         word2vec_dict = shared['lower_word2vec'] if config.lower_word else shared['word2vec']
+        # new_word2idx_dict is a dictionary of word to index for words that are NOT in the vocabulary
+        # that the model was trained on.
         new_word2idx_dict = {word: idx for idx, word in enumerate(word for word in word2vec_dict.keys() if word not in shared['word2idx'])}
         shared['new_word2idx'] = new_word2idx_dict
-
-        offset = len(shared['word2idx'])
 
         # Creates new_emb_mat
         word2vec_dict = shared['lower_word2vec'] if config.lower_word else shared['word2vec']
         new_word2idx_dict = shared['new_word2idx']
+
+        # creates a dictionary of new word index : vector
         idx2vec_dict = {idx: word2vec_dict[word] for word, idx in new_word2idx_dict.items()}
-        # print("{}/{} unique words have corresponding glove vectors.".format(len(idx2vec_dict), len(word2idx_dict)))
+        # Creates an embedding matrix for these new words, and saves them to the "shared data"
         new_emb_mat = np.array([idx2vec_dict[idx] for idx in range(len(idx2vec_dict))], dtype='float32')
         shared['new_emb_mat'] = new_emb_mat
 
+    # Create a DataSet object from the read data.
     data_set = DataSet(data, data_type, shared=shared, valid_idxs=valid_idxs)
     return data_set
 
@@ -290,24 +303,35 @@ def get_squad_data_filter(config):
 def update_config(config, data_sets):
     config.max_num_sents = 0
     config.max_sent_size = 0
+
+    config.max_num_options = 0
+    config.max_option_size = 0
+
     config.max_ques_size = 0
+
     config.max_word_size = 0
     config.max_para_size = 0
     for data_set in data_sets:
         data = data_set.data
         shared = data_set.shared
-        for idx in data_set.valid_idxs:
-            passage_idx = data['*x'][idx]
-            question = data['q'][idx]
-            sents = shared['x'][passage_idx[0]][passage_idx[1]]
+        # get the max lengths for the passages
+        for passage in data["tokenized_passages"]:
+            config.max_num_sents = max(config.max_num_sents, len(passage))
+            config.max_para_size = max(config.max_para_size, sum(map(len, passage)))
+            config.max_sent_size = max(config.max_para_size, max(map(len, passage)))
+            config.max_word_size = max(config.max_word_size, max(len(word) for sentence in passage for word in sentence))
 
-            config.max_para_size = max(config.max_para_size, sum(map(len, sents)))
-            config.max_num_sents = max(config.max_num_sents, len(sents))
-            config.max_sent_size = max(config.max_sent_size, max(map(len, sents)))
-            config.max_word_size = max(config.max_word_size, max(len(word) for sent in sents for word in sent))
-            if len(question) > 0:
-                config.max_ques_size = max(config.max_ques_size, len(question))
-                config.max_word_size = max(config.max_word_size, max(len(word) for word in question))
+        # get the max lengths for the questions
+        for question in data["tokenized_questions"]:
+            num_question_words = len(question)
+            config.max_ques_size = max(config.max_ques_size, num_question_words)
+            config.max_word_size = max(config.max_word_size, max(len(word) for word in question))
+
+        # get the max lengths for the options
+        for options in data["tokenized_options"]:
+            config.max_num_options = max(config.max_num_options, len(options))
+            config.max_option_size = max(config.max_option_size, max(map(len, options)))
+            config.max_word_size = max(config.max_word_size, max(len(word) for option in options for word in option))
 
     if config.mode == 'train':
         config.max_num_sents = min(config.max_num_sents, config.num_sents_th)
