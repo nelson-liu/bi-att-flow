@@ -146,7 +146,6 @@ def _test(config):
     pprint(config.__flags, indent=2)
     models = get_multi_gpu_models(config)
     model = models[0]
-    evaluator = MultiGPUF1Evaluator(config, models, tensor_dict=models[0].tensor_dict if config.vis else None)
     graph_handler = GraphHandler(config, model)
 
     sess = tf.Session(config=tf.ConfigProto(allow_soft_placement=True))
@@ -155,24 +154,17 @@ def _test(config):
     if 0 < config.test_num_batches < num_steps:
         num_steps = config.test_num_batches
 
-    e = None
+    predicted_labels = []
+    actual_labels = []
     for multi_batch in tqdm(test_data.get_multi_batches(config.batch_size, config.num_gpus, num_steps=num_steps, cluster=config.cluster), total=num_steps):
-        ei = evaluator.get_evaluation(sess, multi_batch)
-        e = ei if e is None else e + ei
-        if config.vis:
-            eval_subdir = os.path.join(config.eval_dir, "{}-{}".format(ei.data_type, str(ei.global_step).zfill(6)))
-            if not os.path.exists(eval_subdir):
-                os.mkdir(eval_subdir)
-            path = os.path.join(eval_subdir, str(ei.idxs[0]).zfill(8))
-            graph_handler.dump_eval(ei, path=path)
-
-    print(e)
-    if config.dump_answer:
-        print("dumping answer ...")
-        graph_handler.dump_answer(e)
-    if config.dump_eval:
-        print("dumping eval ...")
-        graph_handler.dump_eval(e)
+        idxs, data_set = multi_batch[0]
+        feed_dict = model.get_feed_dict(data_set, False)
+        global_step, yp = sess.run([model.global_step, model.yp], feed_dict=feed_dict)
+        predicted_labels.extend(list(np.argmax(yp, axis=-1)))
+        actual_labels.extend(list(data_set.data["labels"]))
+    # calculate accuracy given the actual labels and the predicted labels
+    acc = sum(1 for pred, gold in zip(predicted_labels , actual_labels) if pred == gold) / len(actual_labels)
+    print(acc)
 
 
 def _forward(config):
