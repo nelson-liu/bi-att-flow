@@ -118,11 +118,11 @@ class Model(object):
                     # [batch_size, question_size, word_size, char_emb_size]
                     question_char_embeddings = tf.nn.embedding_lookup(char_emb_mat, self.question_characters)
                     # [batch_size, num_options, option_size, word_size, char_emb_size]
-                    options_char_embeddings = tf.nn.embedding_lookup(char_emb_mat, self.passage_characters)
+                    options_char_embeddings = tf.nn.embedding_lookup(char_emb_mat, self.options_characters)
 
                     passage_char_embeddings = tf.reshape(passage_char_embeddings, [-1, sentence_size, word_size, char_emb_size])
                     question_char_embeddings = tf.reshape(question_char_embeddings, [-1, question_size, word_size, char_emb_size])
-                    options_char_embeddings = tf.reshape(options_char_embeddings, [-1, question_size, word_size, char_emb_size])
+                    options_char_embeddings = tf.reshape(options_char_embeddings, [-1, option_size, word_size, char_emb_size])
 
                     filter_sizes = list(map(int, config.out_channel_dims.split(',')))
                     heights = list(map(int, config.filter_heights.split(',')))
@@ -176,11 +176,11 @@ class Model(object):
                 if config.use_char_emb:
                     # TODO: NOT SURE WHAT "di" indicates in the comment below.
                     # Maybe just a placeholder for embedding dimensionality
-                    # [batch_size, num_sentences, sentence_size, di]
+                    # [batch_size, num_sentences, sentence_size, di] (verified)
                     embedded_passage = tf.concat(3, [char_level_embedded_passage, word_level_embedded_passage])
-                    # [batch_size, question_size, di]
+                    # [batch_size, question_size, di] (verified)
                     embedded_question = tf.concat(2, [char_level_embedded_question, word_level_embedded_question])
-                    # [batch_size, num_sentences, sentence_size, di]
+                    # [batch_size, num_options, option_size, di] (verified)
                     embedded_options = tf.concat(3, [char_level_embedded_options, word_level_embedded_options])
                 else:
                     embedded_passage = word_level_embedded_passage
@@ -209,7 +209,7 @@ class Model(object):
         passage_len = tf.reduce_sum(tf.cast(self.passage_mask, 'int32'), 2)
         # [batch_size]
         question_len = tf.reduce_sum(tf.cast(self.question_mask, 'int32'), 1)
-        # [batch_size, num_sentences]
+        # [batch_size, num_options]
         options_len = tf.reduce_sum(tf.cast(self.options_mask, 'int32'), 2)
 
         with tf.variable_scope("prepro"):
@@ -220,17 +220,17 @@ class Model(object):
             encoded_question = tf.concat(2, [fw_outputs, bw_outputs])
             if config.share_lstm_weights:
                 tf.get_variable_scope().reuse_variables()
-                # [batch_size, num_sentences, sentence_size, 2*hidden_size]
+                # [batch_size, num_sentences, sentence_size, 2*hidden_size] (verified)
                 (fw_outputs, bw_outputs), _ = bidirectional_dynamic_rnn(cell, cell, embedded_passage,
                                                                         passage_len, dtype='float', scope='encoded_question')
-                # [batch_size, num_sentences, sentence_size, 2*hidden_size]
+                # [batch_size, num_sentences, sentence_size, 2*hidden_size] (verified)
                 encoded_passage = tf.concat(3, [fw_outputs, bw_outputs])
 
                 tf.get_variable_scope().reuse_variables()
-                # [batch_size, num_options, option_size, 2*hidden_size]
+                # [batch_size, num_options, option_size, 2*hidden_size] (verified)
                 (fw_outputs, bw_outputs), _ = bidirectional_dynamic_rnn(cell, cell, embedded_options,
                                                                         options_len, dtype='float', scope='encoded_question')
-                # [batch_size, num_options, option_size, 2*hidden_size]
+                # [batch_size, num_options, option_size, 2*hidden_size] (verified)
                 encoded_options = tf.concat(3, [fw_outputs, bw_outputs])
             else:
                 # [batch_size, num_sentences, sentence_size, 2*hidden_size]
@@ -244,6 +244,7 @@ class Model(object):
                                                                         options_len, dtype='float', scope='encoded_options')
                 # [batch_size, num_options, option_size, 2*hidden_size]
                 encoded_options = tf.concat(3, [fw_outputs, bw_outputs])
+
             self.tensor_dict['encoded_question'] = encoded_question
             self.tensor_dict['encoded_passage'] = encoded_passage
             self.tensor_dict['encoded_options'] = encoded_options
@@ -327,8 +328,7 @@ class Model(object):
             flattened_passage_mask = tf.reshape(self.passage_mask,
                                                 [-1, num_sentences * sentence_size])
             # shape: [-1, num_sentences*sentence_size, 2xhidden_dim]
-            weighted_passage = envelope * flattened_encoded_passage
-
+            weighted_passage = tf.tile(tf.expand_dims(envelope, 2), [1, 1, hidden_size*2]) * flattened_encoded_passage
             # Now, we encode the weighted passage with a bag-of-words
             # shape: [-1, num_sentences*sentence_size]
             float_passage_mask = tf.cast(flattened_passage_mask, "float32")
@@ -382,7 +382,7 @@ class Model(object):
             # shape: [-1, num_options]
             answer_option_logits = get_logits([tiled_final_encoded_weighted_passage, final_encoded_options],
                                               hidden_size, True,
-                                              mask=self.options_mask,
+                                              mask=tf.cast(options_len, "bool"),
                                               func="dot", scope="option_logits")
 
             self.logits = answer_option_logits
@@ -495,31 +495,15 @@ class Model(object):
         if config.use_glove_for_unk:
             feed_dict[self.new_emb_mat] = batch.shared['new_emb_mat']
 
-        X = batch.data['x']
-        CX = batch.data['cx']
+        X = batch.data['tokenized_passages']
+        CX = batch.data['tokenized_passage_characters']
 
         # TODO: figure out what this does / if it's actually necessary in testing
         if supervised:
-            y = np.zeros([batch_size, num_sentences, sentence_size], dtype='bool')
-            y2 = np.zeros([batch_size, num_sentences, sentence_size], dtype='bool')
+            y = np.zeros([batch_size, num_options], dtype='bool')
             feed_dict[self.y] = y
-            feed_dict[self.y2] = y2
-
-            for i, (xi, cxi, yi) in enumerate(zip(X, CX, batch.data['y'])):
-                start_idx, stop_idx = random.choice(yi)
-                j, k = start_idx
-                j2, k2 = stop_idx
-                if config.single:
-                    X[i] = [xi[j]]
-                    CX[i] = [cxi[j]]
-                    j, j2 = 0, 0
-                if config.squash:
-                    offset = sum(map(len, xi[:j]))
-                    j, k = 0, k + offset
-                    offset = sum(map(len, xi[:j2]))
-                    j2, k2 = 0, k2 + offset
-                y[i, j, k] = True
-                y2[i, j2, k2-1] = True
+            for idx, label in enumerate(batch.data["labels"]):
+                y[idx, label] = True
 
         def _get_word(word):
             d = batch.shared['word2idx']
@@ -570,7 +554,7 @@ class Model(object):
                         passage_characters[i, j, k, l] = _get_char(cxijkl)
 
         # Indexes the options words list and marks the mask values
-        for i, xi in enumerate(batch.data['options']):
+        for i, xi in enumerate(batch.data['tokenized_options']):
             if self.config.squash:
                 xi = [list(itertools.chain(*xi))]
             for j, xij in enumerate(xi):
@@ -585,7 +569,7 @@ class Model(object):
                     options_mask[i, j, k] = True
 
         # Indexes the options characters list.
-        for i, cxi in enumerate(batch.data['options_characters']):
+        for i, cxi in enumerate(batch.data['tokenized_option_characters']):
             if self.config.squash:
                 cxi = [list(itertools.chain(*cxi))]
             for j, cxij in enumerate(cxi):
@@ -600,19 +584,18 @@ class Model(object):
                         options_characters[i, j, k, l] = _get_char(cxijkl)
 
         # Indexes the question words list and marks the mask values
-        for i, qi in enumerate(batch.data['q']):
+        for i, qi in enumerate(batch.data['tokenized_questions']):
             for j, qij in enumerate(qi):
                 question[i, j] = _get_word(qij)
                 question_mask[i, j] = True
 
         # Indexes the question characters list
-        for i, cqi in enumerate(batch.data['cq']):
+        for i, cqi in enumerate(batch.data['tokenized_question_characters']):
             for j, cqij in enumerate(cqi):
                 for k, cqijk in enumerate(cqij):
                     question_characters[i, j, k] = _get_char(cqijk)
                     if k + 1 == config.max_word_size:
                         break
-
         return feed_dict
 
 
