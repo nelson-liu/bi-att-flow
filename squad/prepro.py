@@ -116,11 +116,10 @@ def prepro_each(args, background_path, questions_path, out_name):
     def word_tokenize(tokens):
         return [token.replace("''", '"').replace("``", '"') for token in nltk.word_tokenize(tokens)]
 
-    # if not args.split:
-    #     sent_tokenize = lambda para: [para]
-    # else:
-    #     sent_tokenize = nltk.sent_tokenize
-    sent_tokenize = nltk.sent_tokenize
+    if not args.split:
+        sent_tokenize = lambda para: [para]
+    else:
+        sent_tokenize = nltk.sent_tokenize
 
     # Read the questions and background tsvs
     # raw_file_data is a list of tuples, where the tuple is formatted as:
